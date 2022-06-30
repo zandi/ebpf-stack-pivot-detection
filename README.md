@@ -54,7 +54,28 @@ using a bpftool for my kernel version. On ubuntu I installed bpftool using
 
 TODO
 
+# TODO
+
+* Pull Anthony's research code in
+* Adapt Anthony's code to our PoC use-case, refactor, etc.
+** get working as-is
+** move stack pivot detection logic fully into eBPF
+** refactor data structures, event types as necessary (less userland events)
+* write test programs that exhibit stack pivot behavior and call various syscalls/simulated ROP chains
+* make eBPF programs for syscalls an exploit is likely to use, check user sp against known stack regions
+** failing check gets kill signal sent immediately
+
+# GOTCHAS
+
+* kernel threads (eg: kworker tasks) also go through cgroup_post_fork
+** can probably tell them by newsp in kernel address space, or flags given to clone
+*** cgroup_post_fork event. process id: 21790, thread id: 21790, newsp: 0xffffffffb60cc6a0
+*** root       21790  0.0  0.0      0     0 ?        I    15:09   0:00 [kworker/0:0-events]
+
 # References
 
 https://ir0nstone.gitbook.io/notes/types/stack/stack-pivoting
 https://wikis.rim.net/display/VR/Linux+threading+and+the+stack
+
+Anthony's research on tracking thread stacks to detect a stack pivot (libbpf-core directory):
+https://gitlab.rim.net/bart/bpftest

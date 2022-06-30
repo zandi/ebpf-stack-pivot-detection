@@ -28,7 +28,7 @@ fn event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         &*(data.as_ptr() as *const stack_pivot_poc_bss_types::stack_pivot_data_t)
     };
 
-    println!("cgroup_post_fork event. tid: {}, newsp: {:#x}", event.tid, event.newsp);
+    println!("cgroup_post_fork event. process id: {}, thread id: {}, newsp: {:#x}", event.tgid, event.pid, event.newsp);
 
     0
 }
