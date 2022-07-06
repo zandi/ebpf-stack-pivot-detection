@@ -1,0 +1,24 @@
+apiVersion: apps/v1 # for versions before 1.9.0 use apps/v1beta2
+kind: Deployment
+metadata:
+  name: phoronix-test-suite
+spec:
+  selector:
+    matchLabels:
+      app: phoronix-test-suite
+  template:
+    metadata:
+      labels:
+        app: phoronix-test-suite
+    spec:
+      containers:
+      - name: phoronix-test-suite
+        image: phoronix/pts
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - mountPath: "/var/lib/phoronix-test-suite"
+          name: pts-pv-storage
+      volumes:
+      - name: pts-pv-storage
+        persistentVolumeClaim:
+          claimName: pts-pv-claim

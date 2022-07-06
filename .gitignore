@@ -1,2 +1,7 @@
 *.swp
 .output/
+*.bin
+*.elf
+*.raw
+
+vmlinux.h

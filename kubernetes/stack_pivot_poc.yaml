@@ -1,0 +1,21 @@
+apiVersion: apps/v1 # for versions before 1.9.0 use apps/v1beta2
+kind: Deployment
+metadata:
+  name: stack-pivot-poc-deployment
+spec:
+  selector:
+    matchLabels:
+      app: stack_pivot_poc
+  template:
+    metadata:
+      labels:
+        app: stack_pivot_poc
+    spec:
+      containers:
+      - name: stack-pivot-poc
+        # hardcoded cluster-internal ip. Can use a name if you add something to /etc/hosts or otherwise make
+        # an A record for it accessible to the node (cluster-internal core-dns isn't used by node by default)
+        image: $docker-registry/stack_pivot_poc
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: true
