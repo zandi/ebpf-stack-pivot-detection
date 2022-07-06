@@ -1,4 +1,5 @@
-#include "vmlinux.h"
+#ifndef UTILS_H_
+#define UTILS_H_
 
 #define BUF_SIZE 128
 
@@ -11,11 +12,33 @@
 
 #define MAX_RB_NODE_BOUNDS 51
 
+#define PF_KTHREAD 0x00200000
+
 #define STACK_SRC_SELF 0
 #define STACK_SRC_UNK -1
 #define STACK_SRC_ERR -2
 
-// generic data
+// args for various functions we monitor
+struct clone_user_args {
+    ulong clone_flags;
+    ulong newsp;
+    /*
+    int *parent_tidptr;
+    int *child_tidptr;
+    //*/
+};
+
+/*
+struct wake_up_new_task_args {
+    struct task_struct p;
+};
+//*/
+
+struct do_exit_args {
+    long code;
+};
+
+// generic data (included in all events)
 struct data_t {
     int err;
     int pid;
@@ -36,6 +59,40 @@ struct data_t {
     char buf[BUF_SIZE];
 };
 
+// combine generic data with function-specific args
+struct clone_data {
+    struct data_t data;
+    struct clone_user_args args;
+};
+
+/*
+struct wake_up_new_task_data {
+    struct data_t data;
+    struct wake_up_new_task_args args;
+};
+//*/
+
+struct do_exit_data {
+    struct data_t data;
+    struct do_exit_args args;
+};
+
+union generic_event_data_union {
+    struct clone_data clone_data;
+    //struct wake_up_new_task_data wake_up_new_task_data;
+    struct do_exit_data do_exit_data;
+};
+
+#define CLONE_DATA_TYPE 1
+#define WAKE_UP_NEW_TASK_DATA_TYPE 2
+#define DO_EXIT_DATA_TYPE 3
+#define UNKNOWN_DATA_TYPE -1
+
+struct event_data_t {
+    int inner_type;
+    union generic_event_data_union data;
+};
+
 // combines separate tgid, pid into combined tgid_pid like from bpf_get_current_pid_tgid helper
 #define MAKE_COMBINED_TGID_PID(dest, tgid, pid) \
     dest = tgid << 32 | pid
@@ -45,6 +102,15 @@ struct data_t {
     bpf_core_read(&dest, sizeof(dest), &source)
 #define BPF_READ_STR(dest, source) \
     bpf_core_read_str(&dest, sizeof(dest), &source)
+
+/* Macros for ringbuf definitions for userland communication */
+#define BPF_MAP_DEF(name) \
+    struct { \
+        __uint(type, BPF_MAP_TYPE_RINGBUF); \
+        __uint(max_entries, 256 * 4096); \
+    } ringbuf_map_##name SEC(".maps");
+
+#define BPF_MAP_NAME(name) ringbuf_map_##name
 
 /* Searches a task's virtual memory ranges for a specified address, using the
  * specified rb_node as the starting point. The discovered range's boundaries 
@@ -96,3 +162,25 @@ static void find_vma(struct mm_struct *mm, ulong addr, ulong *start,
     return;
 }
 
+/* Initializes probe data with a time stamp, PID, PPID, and LWP (TID).
+ *
+ * Returns a pointer to the current task. */
+struct task_struct *init_probe_data(struct data_t *data)
+{
+    struct task_struct *t;
+    struct task_struct *real_parent;
+    ulong pid_tgid;
+
+    data->time = bpf_ktime_get_ns();
+    pid_tgid = bpf_get_current_pid_tgid();
+    data->pid = pid_tgid >> 32;
+    data->tid = pid_tgid & 0xffffffff;
+    t = bpf_get_current_task_btf();
+    BPF_READ(data->tid, t->pid);
+    BPF_READ(real_parent, t->real_parent);
+    BPF_READ(data->ppid, real_parent->pid);
+
+    return t;
+}
+
+#endif // UTILS_H_

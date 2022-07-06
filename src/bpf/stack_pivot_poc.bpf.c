@@ -1,3 +1,4 @@
+
 #include "vmlinux.h"
 
 #include <bpf/bpf_helpers.h>
@@ -23,8 +24,19 @@ struct stack_pivot_data_t {
     unsigned long newsp;
 };
 
-
 // maps
+BPF_MAP_DEF(register_kprobe)
+BPF_MAP_DEF(execve)
+BPF_MAP_DEF(clone)
+BPF_MAP_DEF(clone_ret)
+BPF_MAP_DEF(wake_up_new_task)
+BPF_MAP_DEF(cgroup_post_fork)
+BPF_MAP_DEF(do_exit)
+
+// use a single ringbuf map to simplify things for now for the rust side
+// later we'll just have a single ringbuf to report events, and not have a
+// type/ringbuf for every eBPF program
+BPF_MAP_DEF(generic_event)
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -60,8 +72,11 @@ struct {
 } stack_map SEC(".maps");
 
 // force exporting the type to rust skeleton
-struct stack_pivot_data_t __unused = {0};
+struct event_data_t __unused_event_data = {0};
 
+struct clone_data __unused_clone_data = {0};
+//struct wake_up_new_task_data __unused_wake_up_new_task_data = {0};
+struct do_exit_data __unused_do_exit_data = {0};
 
 /* Searches backlog of stack VMAs for one that contains the current stack
  * pointer. If none found, then checks SP against VMA of the current task's
@@ -142,7 +157,30 @@ static int check_stack_vma(struct data_t *data, struct task_struct *t)
 SEC("kprobe/clone")
 int kprobe_clone(struct pt_regs *ctx)
 {
-    return 0;
+    struct clone_data clone_data = { 0 };
+    struct data_t *data = &clone_data.data;
+    struct pt_regs *uctx;
+    struct task_struct *t;
+
+    t = init_probe_data(data);
+
+    if (t->flags & PF_KTHREAD)
+        return 0;
+
+    // sys_clone user args
+    uctx = (struct pt_regs *)ctx->di;
+    BPF_READ(clone_data.args.clone_flags, uctx->di);
+    BPF_READ(clone_data.args.newsp, uctx->si);
+    /*
+    BPF_READ(clone_data.args.parent_tidptr, uctx->dx);
+    BPF_READ(clone_data.args.child_tidptr, uctx->r10);
+    //*/
+    BPF_READ(data->sp, uctx->sp);
+
+    data->err = check_stack_vma(data, t);
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(clone), &clone_data, sizeof(clone_data),
+            0);
 }
 
 // I don't think I need this one?
@@ -151,6 +189,22 @@ int kprobe_clone(struct pt_regs *ctx)
 SEC("kretprobe/clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
+    struct clone_data clone_data = { 0 };
+    struct data_t *data = &clone_data.data;
+    struct task_struct *t;
+
+    t = init_probe_data(data);
+
+    if (t->flags & PF_KTHREAD)
+        return 0;
+
+    // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
+    BPF_READ(data->retval, ctx->ax);
+
+    // Send to loader
+    bpf_ringbuf_output(&BPF_MAP_NAME(clone_ret), &clone_data,
+            sizeof(clone_data), 0);
+
     return 0;
 }
 
@@ -166,6 +220,7 @@ int kretprobe_clone(struct pt_regs *ctx)
  * Call flow to cgroup_post_fork is like so:
  * clone > kernel_clone > copy_process > cgroup_post_fork
  */
+/*
 SEC("kprobe/cgroup_post_fork")
 int kprobe_cgroup_post_fork(struct pt_regs *ctx)
 {
@@ -198,6 +253,7 @@ int kprobe_cgroup_post_fork(struct pt_regs *ctx)
     // TODO: turn this into events only for stack pivots
     bpf_ringbuf_output(&stack_pivot_events, &data, sizeof(data), 0);
 }
+//*/
 
 /* Function prototype:
  *
@@ -210,12 +266,79 @@ int kprobe_cgroup_post_fork(struct pt_regs *ctx)
 SEC("kprobe/wake_up_new_task")
 int kprobe_wake_up_new_task(struct pt_regs *ctx)
 {
+    /*
+    struct wake_up_new_task_data wake_up_new_task_data = { 0 };
+    struct data_t *data = &wake_up_new_task_data.data;
+    struct task_struct *new_task;
+    struct mm_struct *mm;
+    struct fork_frame *fork_frame;
+    struct stack_data stack = { 0 };
+    uint flags;
+
+    init_probe_data(data);
+ 
+    // Get new task thread ID
+    new_task = (struct task_struct *)ctx->di;
+    BPF_READ(flags, new_task->flags);
+    if (flags & PF_KTHREAD)
+        return 0;
+    BPF_READ(data->new_pid, new_task->pid);
+    BPF_READ(mm, new_task->mm);
+    BPF_READ(data->start_stack, mm->start_stack);
+    wake_up_new_task_data.args.p = new_task;
+    //*/
+
+    /* Get stack VMA using the new task's pt_regs->sp. In kernels >= 4.9 
+     * the new task's pt_regs is saved to the regs field in a fork_frame
+     * struct. This fork_frame is saved to the new task's thread.sp field. In 
+     * kernels < 4.9 pt_regs is saved directly to thread.sp. */
+
+    /*
+    BPF_READ(fork_frame, new_task->thread.sp);
+    BPF_READ(data->sp, fork_frame->regs.sp);
+    find_vma(mm, data->sp, &stack.start, &stack.end);
+    stack.pid = data->new_pid;
+    if (stack.start && stack.end) {
+        // Update stack map with new thread stack info
+        bpf_map_update_elem(&stack_map, &data->new_pid, &stack, BPF_NOEXIST);
+        data->stack_start = stack.start;
+        data->stack_end = stack.end;
+        data->stack_pid = stack.pid;
+    }
+
+    // Send to loader
+    bpf_ringbuf_output(&BPF_MAP_NAME(wake_up_new_task), &wake_up_new_task_data, 
+            sizeof(wake_up_new_task_data), 0);
+    //*/
+
     return 0;
 }
 
 SEC("kprobe/do_exit")
 int kprobe_do_exit(struct pt_regs *ctx)
 {
+    struct do_exit_data do_exit_data = { 0 };
+    struct data_t *data = &do_exit_data.data;
+    struct pt_regs *uctx;
+    struct task_struct *t;
+
+    t = init_probe_data(data);
+
+    if (t->flags & PF_KTHREAD)
+        return 0;
+
+    // do_exit args
+    uctx = (struct pt_regs *)ctx->di;
+    BPF_READ(do_exit_data.args.code, uctx->di);
+
+    // Delete entry for exiting thread
+    bpf_map_delete_elem(&stack_map, &data->tid);
+    data->time = bpf_ktime_get_ns();
+
+    // Send to loader
+    bpf_ringbuf_output(&BPF_MAP_NAME(do_exit), &do_exit_data,
+            sizeof(do_exit_data), 0);
+
     return 0;
 }
 
@@ -242,68 +365,9 @@ int kprobe_execve(struct pt_regs *ctx)
     return 0;
 }
 
-//*
 // TODO: fix this, use a proper syscall handling function
 SEC("kprobe/ksys_mmap_pgoff")
 int handle_mmap(struct pt_regs *ctx)
 {
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-    pid_t tgid = tgid_pid >> 32;
-    pid_t pid = tgid_pid;
-
-
-    // fetch user's stack pointer, check against map entry (should one exist)
-    unsigned long user_sp = ctx->sp;
-
-    bpf_printk("[ksys_mmap_pgoff] %d:%d (%#lx)", tgid, pid, tgid_pid);
-    if (tgid != pid){
-        // non-main thread case, check map
-        bpf_printk("[do_mmap] lookup up %#lx", tgid_pid);
-        void *val = bpf_map_lookup_elem(&thread_stacks, &tgid_pid);
-        if (val != NULL) {
-            // check user sp against newsp value from clone call which created this thread
-            bpf_printk("\tuser_sp: %#lx, newsp: %#lx", user_sp, *((unsigned long *)val));
-        }
-        else {
-            // no entry; assume thread exists before we were loaded
-            bpf_printk("\tuser_sp: %#lx, (thread creation not observed)", user_sp);
-        }
-    } else {
-        // main thread case, task_struct info should be accurate
-        bpf_printk("\tmain thread case. TODO: look up stack from current task_struct");
-    }
-
     return 0;
 }
-//*/
-
-/*
-// Actually, seems like a tracepoint won't work; we don't get the user's sp register
-// taken from /sys/kernel/debug/tracing/events/syscalls/sys_enter_mmap/format
-struct sys_enter_mmap_args {
-    unsigned short common_type;
-    unsigned char common_flags;
-    unsigned char common_preempt_count;
-    int common_pid;
-
-    int __syscall_nr;
-    unsigned long addr;
-    unsigned long len;
-    unsigned long prot;
-    unsigned long flags;
-    unsigned long fd;
-    unsigned long off;
-};
-
-SEC("tracepoint/syscalls/sys_enter_mmap")
-int handle__sys_enter_mmap(struct sys_enter_mmap_args *ctx)
-{
-    u64 tgid_pid = bpf_get_current_pid_tgid();
-    pid_t tgid = tgid_pid >> 32;
-    pid_t pid = tgid_pid;
-
-    bpf_printk("[sys_enter_mmap] %d:%d\n", tgid, pid);
-
-    return 0;
-}
-//*/
