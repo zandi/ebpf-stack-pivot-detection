@@ -22,6 +22,8 @@
 struct clone_user_args {
     ulong clone_flags;
     ulong newsp;
+    int parent_tid;
+    int child_tid;
     /*
     int *parent_tidptr;
     int *child_tidptr;
@@ -30,7 +32,7 @@ struct clone_user_args {
 
 /*
 struct wake_up_new_task_args {
-    struct task_struct p;
+    struct task_struct *task;
 };
 //*/
 

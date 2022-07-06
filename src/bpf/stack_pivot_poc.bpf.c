@@ -1,4 +1,3 @@
-
 #include "vmlinux.h"
 
 #include <bpf/bpf_helpers.h>
@@ -72,6 +71,8 @@ struct {
 } stack_map SEC(".maps");
 
 // force exporting the type to rust skeleton
+//struct task_struct __unused_task_struct = {0};
+
 struct event_data_t __unused_event_data = {0};
 
 struct clone_data __unused_clone_data = {0};
@@ -157,10 +158,12 @@ static int check_stack_vma(struct data_t *data, struct task_struct *t)
 SEC("kprobe/clone")
 int kprobe_clone(struct pt_regs *ctx)
 {
+    /*
     struct clone_data clone_data = { 0 };
     struct data_t *data = &clone_data.data;
     struct pt_regs *uctx;
     struct task_struct *t;
+    int *tid_tmp;
 
     t = init_probe_data(data);
 
@@ -171,16 +174,17 @@ int kprobe_clone(struct pt_regs *ctx)
     uctx = (struct pt_regs *)ctx->di;
     BPF_READ(clone_data.args.clone_flags, uctx->di);
     BPF_READ(clone_data.args.newsp, uctx->si);
-    /*
-    BPF_READ(clone_data.args.parent_tidptr, uctx->dx);
-    BPF_READ(clone_data.args.child_tidptr, uctx->r10);
-    //*/
+    BPF_READ(tid_tmp, uctx->dx);
+    clone_data.args.parent_tid = *tid_tmp;
+    BPF_READ(tid_tmp, uctx->r10);
+    clone_data.args.child_tid = *tid_tmp;
     BPF_READ(data->sp, uctx->sp);
 
     data->err = check_stack_vma(data, t);
 
     bpf_ringbuf_output(&BPF_MAP_NAME(clone), &clone_data, sizeof(clone_data),
             0);
+    //*/
 }
 
 // I don't think I need this one?
@@ -189,6 +193,7 @@ int kprobe_clone(struct pt_regs *ctx)
 SEC("kretprobe/clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
+    /*
     struct clone_data clone_data = { 0 };
     struct data_t *data = &clone_data.data;
     struct task_struct *t;
@@ -205,6 +210,7 @@ int kretprobe_clone(struct pt_regs *ctx)
     bpf_ringbuf_output(&BPF_MAP_NAME(clone_ret), &clone_data,
             sizeof(clone_data), 0);
 
+    //*/
     return 0;
 }
 
@@ -285,7 +291,7 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
     BPF_READ(data->new_pid, new_task->pid);
     BPF_READ(mm, new_task->mm);
     BPF_READ(data->start_stack, mm->start_stack);
-    wake_up_new_task_data.args.p = new_task;
+    wake_up_new_task_data.args.task = new_task;
     //*/
 
     /* Get stack VMA using the new task's pt_regs->sp. In kernels >= 4.9 
@@ -317,6 +323,7 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
 SEC("kprobe/do_exit")
 int kprobe_do_exit(struct pt_regs *ctx)
 {
+    /*
     struct do_exit_data do_exit_data = { 0 };
     struct data_t *data = &do_exit_data.data;
     struct pt_regs *uctx;
@@ -338,6 +345,8 @@ int kprobe_do_exit(struct pt_regs *ctx)
     // Send to loader
     bpf_ringbuf_output(&BPF_MAP_NAME(do_exit), &do_exit_data,
             sizeof(do_exit_data), 0);
+
+    //*/
 
     return 0;
 }

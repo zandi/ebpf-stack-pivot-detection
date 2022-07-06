@@ -61,6 +61,7 @@ TODO
 ** get working as-is
 ** move stack pivot detection logic fully into eBPF
 ** refactor data structures, event types as necessary (less userland events)
+** double-check that we pull in updates from Anthony's code
 * write test programs that exhibit stack pivot behavior and call various syscalls/simulated ROP chains
 * make eBPF programs for syscalls an exploit is likely to use, check user sp against known stack regions
 ** failing check gets kill signal sent immediately
