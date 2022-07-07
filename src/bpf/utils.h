@@ -30,7 +30,7 @@ struct clone_user_args {
     //*/
 };
 
-/*
+//*
 struct wake_up_new_task_args {
     struct task_struct *task;
 };
@@ -67,7 +67,7 @@ struct clone_data {
     struct clone_user_args args;
 };
 
-/*
+//*
 struct wake_up_new_task_data {
     struct data_t data;
     struct wake_up_new_task_args args;

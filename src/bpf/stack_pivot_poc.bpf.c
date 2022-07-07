@@ -282,7 +282,7 @@ int kprobe_cgroup_post_fork(struct pt_regs *ctx)
 SEC("kprobe/wake_up_new_task")
 int kprobe_wake_up_new_task(struct pt_regs *ctx)
 {
-    /*
+    //*
     struct wake_up_new_task_data wake_up_new_task_data = { 0 };
     struct data_t *data = &wake_up_new_task_data.data;
     struct task_struct *new_task;
@@ -309,7 +309,7 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
      * struct. This fork_frame is saved to the new task's thread.sp field. In 
      * kernels < 4.9 pt_regs is saved directly to thread.sp. */
 
-    /*
+    //*
     BPF_READ(fork_frame, new_task->thread.sp);
     BPF_READ(data->sp, fork_frame->regs.sp);
     find_vma(mm, data->sp, &stack.start, &stack.end);
@@ -321,6 +321,9 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
         data->stack_end = stack.end;
         data->stack_pid = stack.pid;
     }
+
+    /* hide type from rust side of things, since we have weird errors with the task_struct type
+    // when it gets up there
 
     // Send to loader
     bpf_ringbuf_output(&BPF_MAP_NAME(wake_up_new_task), &wake_up_new_task_data, 

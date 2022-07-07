@@ -16,8 +16,8 @@ const ERR_LEVEL_WARNING: i32 = 1;
 const ERR_LEVEL_ALERT: i32 = 2;
 
 const ERR_TYPE_NONE: i32 = 0;
-const ERR_TYPE_UNK_STACK: i32 = ((ERR_LEVEL_WARNING << 12) | 1);
-const ERR_TYPE_STACK_PIVOT: i32 =  ((ERR_LEVEL_ALERT << 12) | 1);
+const ERR_TYPE_UNK_STACK: i32 = (ERR_LEVEL_WARNING << 12) | 1;
+const ERR_TYPE_STACK_PIVOT: i32 =  (ERR_LEVEL_ALERT << 12) | 1;
 
 // ok: return 0
 // error: return 1
@@ -70,6 +70,28 @@ fn clone_data_ret_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     0
 }
 
+/*
+fn wake_up_new_task_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
+    if data.len() != mem::size_of::<stack_pivot_poc_bss_types::wake_up_new_task_data>() {
+        eprintln!(
+            "Invalid size {} != {}",
+            data.len(),
+            mem::size_of::<stack_pivot_poc_bss_types::wake_up_new_task_data>()
+        );
+        return 1;
+    }
+
+    let event = unsafe {
+        &*(data.as_ptr() as *const stack_pivot_poc_bss_types::wake_up_new_task_data)
+    };
+
+    println!("[wake_up_new_task] tgid:pid {}:{}", event.data.pid, event.data.tid);
+
+    0
+}
+*/
+
+
 fn main() -> Result<(), Error> {
     
     let skel_builder = StackPivotPocSkelBuilder::default();
@@ -91,6 +113,13 @@ fn main() -> Result<(), Error> {
         clone_data_ret_event_handler(data)
     })
     .unwrap();
+    /*
+    perf_builder.add(skel.maps().ringbuf_map_wake_up_new_task(), move |data| {
+        wake_up_new_task_event_handler(data)
+    })
+    .unwrap();
+    */
+
     let ringbuf = perf_builder.build().unwrap();
 
     skel.attach();
