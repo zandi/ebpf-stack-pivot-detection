@@ -31,6 +31,7 @@ BPF_MAP_DEF(clone_ret)
 BPF_MAP_DEF(wake_up_new_task)
 BPF_MAP_DEF(cgroup_post_fork)
 BPF_MAP_DEF(do_exit)
+BPF_MAP_DEF(new_stack)
 
 // use a single ringbuf map to simplify things for now for the rust side
 // later we'll just have a single ringbuf to report events, and not have a
@@ -76,8 +77,9 @@ struct {
 struct event_data_t __unused_event_data = {0};
 
 struct clone_data __unused_clone_data = {0};
-//struct wake_up_new_task_data __unused_wake_up_new_task_data = {0};
 struct do_exit_data __unused_do_exit_data = {0};
+
+struct stack_data __unused_stack_data = {0};
 
 /* Searches backlog of stack VMAs for one that contains the current stack
  * pointer. If none found, then checks SP against VMA of the current task's
@@ -321,7 +323,12 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
         data->stack_end = stack.end;
         data->stack_pid = stack.pid;
     }
+    else {
+        // TODO: report some kind of error? we should be able to find the VMA
+    }
 
+    // tell the user about a new stack (debug output)
+    bpf_ringbuf_output(&BPF_MAP_NAME(new_stack), &stack, sizeof(stack), 0);
     /* hide type from rust side of things, since we have weird errors with the task_struct type
     // when it gets up there
 
@@ -336,7 +343,7 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
 SEC("kprobe/do_exit")
 int kprobe_do_exit(struct pt_regs *ctx)
 {
-    /*
+    //*
     struct do_exit_data do_exit_data = { 0 };
     struct data_t *data = &do_exit_data.data;
     struct pt_regs *uctx;

@@ -19,21 +19,29 @@ const ERR_TYPE_NONE: i32 = 0;
 const ERR_TYPE_UNK_STACK: i32 = (ERR_LEVEL_WARNING << 12) | 1;
 const ERR_TYPE_STACK_PIVOT: i32 =  (ERR_LEVEL_ALERT << 12) | 1;
 
+fn parse_message<T>(data: &[u8]) -> Option<*const T> {
+    if data.len() != mem::size_of::<T>() {
+        eprintln!(
+            "Invalid size {} != {}",
+            data.len(),
+            mem::size_of::<T>()
+        );
+        return None;
+    }
+
+    let event = unsafe {
+        &*(data.as_ptr() as *const T)
+    };
+
+    Some(event)
+}
+
 // ok: return 0
 // error: return 1
 fn clone_data_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     // todo process/print data
-    if data.len() != mem::size_of::<stack_pivot_poc_bss_types::clone_data>() {
-        eprintln!(
-            "Invalid size {} != {}",
-            data.len(),
-            mem::size_of::<stack_pivot_poc_bss_types::clone_data>()
-        );
-        return 1;
-    }
-
     let event = unsafe {
-        &*(data.as_ptr() as *const stack_pivot_poc_bss_types::clone_data)
+        *parse_message::<stack_pivot_poc_bss_types::clone_data>(data).unwrap()
     };
 
     let error_label = match event.data.err {
@@ -52,17 +60,8 @@ fn clone_data_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
 // error: return 1
 fn clone_data_ret_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     // todo process/print data
-    if data.len() != mem::size_of::<stack_pivot_poc_bss_types::clone_data>() {
-        eprintln!(
-            "Invalid size {} != {}",
-            data.len(),
-            mem::size_of::<stack_pivot_poc_bss_types::clone_data>()
-        );
-        return 1;
-    }
-
     let event = unsafe {
-        &*(data.as_ptr() as *const stack_pivot_poc_bss_types::clone_data)
+        *parse_message::<stack_pivot_poc_bss_types::clone_data>(data).unwrap()
     };
 
     println!("[clone return] tgid:pid {}:{}", event.data.pid, event.data.tid);
@@ -70,27 +69,27 @@ fn clone_data_ret_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     0
 }
 
-/*
-fn wake_up_new_task_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
-    if data.len() != mem::size_of::<stack_pivot_poc_bss_types::wake_up_new_task_data>() {
-        eprintln!(
-            "Invalid size {} != {}",
-            data.len(),
-            mem::size_of::<stack_pivot_poc_bss_types::wake_up_new_task_data>()
-        );
-        return 1;
-    }
-
+fn do_exit_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
+    // todo process/print data
     let event = unsafe {
-        &*(data.as_ptr() as *const stack_pivot_poc_bss_types::wake_up_new_task_data)
+        *parse_message::<stack_pivot_poc_bss_types::do_exit_data>(data).unwrap()
     };
 
-    println!("[wake_up_new_task] tgid:pid {}:{}", event.data.pid, event.data.tid);
+    println!("[do_exit] tgid:pid {}:{}", event.data.pid, event.data.tid);
 
     0
 }
-*/
 
+fn wake_up_new_task_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
+    // todo process/print data
+    let event = unsafe {
+        *parse_message::<stack_pivot_poc_bss_types::stack_data>(data).unwrap()
+    };
+
+    println!("[wake_up_new_task] new stack observed: tid {} [{:#16x}, {:#16x})", event.pid, event.start, event.end);
+
+    0
+}
 
 fn main() -> Result<(), Error> {
     
@@ -113,12 +112,14 @@ fn main() -> Result<(), Error> {
         clone_data_ret_event_handler(data)
     })
     .unwrap();
-    /*
-    perf_builder.add(skel.maps().ringbuf_map_wake_up_new_task(), move |data| {
+    perf_builder.add(skel.maps().ringbuf_map_do_exit(), move |data| {
+        do_exit_event_handler(data)
+    })
+    .unwrap();
+    perf_builder.add(skel.maps().ringbuf_map_new_stack(), move |data| {
         wake_up_new_task_event_handler(data)
     })
     .unwrap();
-    */
 
     let ringbuf = perf_builder.build().unwrap();
 
