@@ -11,6 +11,14 @@ use libbpf_rs::RingBufferBuilder;
 mod stack_pivot_poc;
 use stack_pivot_poc::*;
 
+// would be nice if we could pull this in directly from utils.h
+const ERR_LEVEL_WARNING: i32 = 1;
+const ERR_LEVEL_ALERT: i32 = 2;
+
+const ERR_TYPE_NONE: i32 = 0;
+const ERR_TYPE_UNK_STACK: i32 = ((ERR_LEVEL_WARNING << 12) | 1);
+const ERR_TYPE_STACK_PIVOT: i32 =  ((ERR_LEVEL_ALERT << 12) | 1);
+
 // ok: return 0
 // error: return 1
 fn clone_data_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
@@ -28,7 +36,14 @@ fn clone_data_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         &*(data.as_ptr() as *const stack_pivot_poc_bss_types::clone_data)
     };
 
-    println!("[clone event] tgid:pid {}:{}", event.data.pid, event.data.tid);
+    let error_label = match event.data.err {
+        ERR_TYPE_NONE => "None",
+        ERR_TYPE_UNK_STACK => "Unknown Stack",
+        ERR_TYPE_STACK_PIVOT => "Stack Pivot",
+        _ => "Unknown Error Value",
+    };
+
+    println!("[clone event] {}:{} flags: {:#16x}, newsp: {:#16x}, error: {}", event.data.pid, event.data.tid, event.args.clone_flags, event.args.newsp, error_label);
 
     0
 }

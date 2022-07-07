@@ -155,10 +155,9 @@ static int check_stack_vma(struct data_t *data, struct task_struct *t)
  * This will see the newsp value which gives us the stack, but doesn't
  * have the thread's pid yet (hasn't been allocated yet)
  */
-SEC("kprobe/clone")
+SEC("kprobe/__x64_sys_clone")
 int kprobe_clone(struct pt_regs *ctx)
 {
-    /*
     struct clone_data clone_data = { 0 };
     struct data_t *data = &clone_data.data;
     struct pt_regs *uctx;
@@ -174,23 +173,34 @@ int kprobe_clone(struct pt_regs *ctx)
     uctx = (struct pt_regs *)ctx->di;
     BPF_READ(clone_data.args.clone_flags, uctx->di);
     BPF_READ(clone_data.args.newsp, uctx->si);
+
     BPF_READ(tid_tmp, uctx->dx);
-    clone_data.args.parent_tid = *tid_tmp;
+    bpf_probe_read(&clone_data.args.parent_tid, sizeof(clone_data.args.parent_tid), tid_tmp);
     BPF_READ(tid_tmp, uctx->r10);
-    clone_data.args.child_tid = *tid_tmp;
+    bpf_probe_read(&clone_data.args.child_tid, sizeof(clone_data.args.child_tid), tid_tmp);
+
     BPF_READ(data->sp, uctx->sp);
 
     data->err = check_stack_vma(data, t);
 
-    bpf_ringbuf_output(&BPF_MAP_NAME(clone), &clone_data, sizeof(clone_data),
-            0);
-    //*/
+    bpf_ringbuf_output(&BPF_MAP_NAME(clone), &clone_data, sizeof(clone_data), 0);
+
+    return 0;
+}
+
+// if we need to kprobe like this, we'll have to make sure we catch
+// all possible entrypoints so we aren't evaded
+// TODO: verify we can reach this (int 0x80?)
+SEC("kprobe/__ia32_sys_clone")
+int kprobe_clone_ia32(struct pt_regs *ctx)
+{
+    return 0;
 }
 
 // I don't think I need this one?
 // TODO: maybe this would be good for _not_ adding a thread stack if
 // the clone fails for some reason
-SEC("kretprobe/clone")
+SEC("kretprobe/__x64_sys_clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
     /*
@@ -361,15 +371,17 @@ int kprobe_do_exit(struct pt_regs *ctx)
  * 
  * watch for stack pivots by checking userland stack pointer
  */
-SEC("kprobe/execve")
+SEC("kprobe/__x64_sys_execve")
 int kprobe_execve(struct pt_regs *ctx)
 {
     struct pt_regs *uctx;
     unsigned long user_sp;
 
-    uctx = (struct pt_regs *)ctx->di;
+    //uctx = (struct pt_regs *)ctx->di;
+    BPF_READ(uctx, ctx->di);
 
-    bpf_core_read(&user_sp, sizeof(user_sp), uctx->sp);
+    //bpf_core_read(&user_sp, sizeof(user_sp), uctx->sp);
+    BPF_READ(user_sp, uctx->sp);
 
     return 0;
 }
