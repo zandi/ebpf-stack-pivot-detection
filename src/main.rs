@@ -64,7 +64,7 @@ fn clone_data_ret_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         *parse_message::<stack_pivot_poc_bss_types::clone_data>(data).unwrap()
     };
 
-    println!("[clone return] tgid:pid {}:{}", event.data.pid, event.data.tid);
+    println!("[clone return] tgid:pid {}:{} returns {}", event.data.pid, event.data.tid, event.data.retval);
 
     0
 }

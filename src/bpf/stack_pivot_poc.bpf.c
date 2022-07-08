@@ -71,15 +71,13 @@ struct {
     __type(value, struct stack_data);
 } stack_map SEC(".maps");
 
-// force exporting the type to rust skeleton
-//struct task_struct __unused_task_struct = {0};
-
-struct event_data_t __unused_event_data = {0};
-
-struct clone_data __unused_clone_data = {0};
-struct do_exit_data __unused_do_exit_data = {0};
-
-struct stack_data __unused_stack_data = {0};
+// force exporting types to rust skeleton
+#define EXPORT_TYPE(t) \
+    struct t __unused_##t = {0}
+EXPORT_TYPE(event_data_t);
+EXPORT_TYPE(clone_data);
+EXPORT_TYPE(do_exit_data);
+EXPORT_TYPE(stack_data);
 
 /* Searches backlog of stack VMAs for one that contains the current stack
  * pointer. If none found, then checks SP against VMA of the current task's
@@ -134,7 +132,7 @@ static int check_stack_vma(struct data_t *data, struct task_struct *t)
                 data->stack_src = STACK_SRC_UNK;
                 return ERR_TYPE_UNK_STACK;
             }
-            else {
+            else { // TODO: is this case even possible? Shouldn't any sp which is valid (doesn't segfault) have a VAM?
                 // sp's VMA not in process memory, possible stack pivot
                 data->stack_src = STACK_SRC_ERR;
                 return ERR_TYPE_STACK_PIVOT;
@@ -201,11 +199,10 @@ int kprobe_clone_ia32(struct pt_regs *ctx)
 
 // I don't think I need this one?
 // TODO: maybe this would be good for _not_ adding a thread stack if
-// the clone fails for some reason
+// the clone fails for some reason, but then we don't have the tid...
 SEC("kretprobe/__x64_sys_clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
-    /*
     struct clone_data clone_data = { 0 };
     struct data_t *data = &clone_data.data;
     struct task_struct *t;
@@ -222,56 +219,8 @@ int kretprobe_clone(struct pt_regs *ctx)
     bpf_ringbuf_output(&BPF_MAP_NAME(clone_ret), &clone_data,
             sizeof(clone_data), 0);
 
-    //*/
     return 0;
 }
-
-// TODO: not actually used in most recent version of Anthony's research code
-/* Function prototype:
- *
- * void cgroup_post_fork(struct task_struct *child,
- *                       struct kernel_clone_args *kargs)
- *
- * called late enough to have thread's newly allocated pid, and
- * also (since kernel 5.7) has access to kargs which will contain newsp.
- *
- * Call flow to cgroup_post_fork is like so:
- * clone > kernel_clone > copy_process > cgroup_post_fork
- */
-/*
-SEC("kprobe/cgroup_post_fork")
-int kprobe_cgroup_post_fork(struct pt_regs *ctx)
-{
-    return 0;
-
-    struct stack_pivot_data_t data = { 0 };
-    u64 tgid_pid;
-
-    struct task_struct *child = (struct task_struct *)ctx->di;
-    struct kernel_clone_args *kargs = (struct kernel_clone_args *)ctx->si;
-
-    // get thread id + process id from new child task_struct
-    bpf_core_read(&data.pid, sizeof(data.pid), &child->pid);
-    bpf_core_read(&data.tgid, sizeof(data.tgid), &child->tgid);
-
-    // juse like bpf_get_current_pid_tgid, but for new child task_struct
-    MAKE_COMBINED_TGID_PID(tgid_pid, data.tgid, data.pid);
-
-    // get newsp from kernel clone args
-    bpf_core_read(&data.newsp, sizeof(data.newsp), &kargs->stack);
-
-    // only track stack pointers of non-main threads of userland programs
-    // (new kworker tasks will have a stack sp in kernel address space)
-    if (data.newsp != 0 && data.newsp < 0x800000000000) {
-        bpf_printk("[cgroup_post_fork] adding %#lx -> %#lx", tgid_pid, &data.newsp);
-        bpf_map_update_elem(&thread_stacks, &tgid_pid, &data.newsp, BPF_ANY);
-    }
-
-    // send the event
-    // TODO: turn this into events only for stack pivots
-    bpf_ringbuf_output(&stack_pivot_events, &data, sizeof(data), 0);
-}
-//*/
 
 /* Function prototype:
  *
@@ -280,11 +229,14 @@ int kprobe_cgroup_post_fork(struct pt_regs *ctx)
  * Called each time a new thread is created, so we can update the map with
  * a new entry with a valid thread ID (key) and stack base (value). This 
  * kprobe is required to catch a new thread's ID before it starts.
+ *
+ * Really, this is necessary because it has the new task's task_struct, which
+ * allows us to find the stack region's VMA, and thus full start/end address, which
+ * is far more useful than just a known good stack pointer.
  */
 SEC("kprobe/wake_up_new_task")
 int kprobe_wake_up_new_task(struct pt_regs *ctx)
 {
-    //*
     struct wake_up_new_task_data wake_up_new_task_data = { 0 };
     struct data_t *data = &wake_up_new_task_data.data;
     struct task_struct *new_task;
@@ -304,14 +256,12 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
     BPF_READ(mm, new_task->mm);
     BPF_READ(data->start_stack, mm->start_stack);
     wake_up_new_task_data.args.task = new_task;
-    //*/
 
     /* Get stack VMA using the new task's pt_regs->sp. In kernels >= 4.9 
      * the new task's pt_regs is saved to the regs field in a fork_frame
      * struct. This fork_frame is saved to the new task's thread.sp field. In 
      * kernels < 4.9 pt_regs is saved directly to thread.sp. */
 
-    //*
     BPF_READ(fork_frame, new_task->thread.sp);
     BPF_READ(data->sp, fork_frame->regs.sp);
     find_vma(mm, data->sp, &stack.start, &stack.end);
@@ -329,21 +279,14 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
 
     // tell the user about a new stack (debug output)
     bpf_ringbuf_output(&BPF_MAP_NAME(new_stack), &stack, sizeof(stack), 0);
-    /* hide type from rust side of things, since we have weird errors with the task_struct type
-    // when it gets up there
-
-    // Send to loader
-    bpf_ringbuf_output(&BPF_MAP_NAME(wake_up_new_task), &wake_up_new_task_data, 
-            sizeof(wake_up_new_task_data), 0);
-    //*/
 
     return 0;
 }
 
+// Clean up our thread stack map when a thread exits.
 SEC("kprobe/do_exit")
 int kprobe_do_exit(struct pt_regs *ctx)
 {
-    //*
     struct do_exit_data do_exit_data = { 0 };
     struct data_t *data = &do_exit_data.data;
     struct pt_regs *uctx;
@@ -362,17 +305,15 @@ int kprobe_do_exit(struct pt_regs *ctx)
     bpf_map_delete_elem(&stack_map, &data->tid);
     data->time = bpf_ktime_get_ns();
 
-    // Send to loader
+    // Send to loader (debug output)
     bpf_ringbuf_output(&BPF_MAP_NAME(do_exit), &do_exit_data,
             sizeof(do_exit_data), 0);
-
-    //*/
 
     return 0;
 }
 
 
-// Everything below here are eBPF programs only for monitoring syscalls shellcode
+// Everything below here are eBPF programs only for monitoring syscalls that shellcode
 // using a stack pivot may use. This is where we check if a stack pivot is happening
 
 /* Function prototype:
@@ -388,10 +329,16 @@ int kprobe_execve(struct pt_regs *ctx)
     unsigned long user_sp;
 
     //uctx = (struct pt_regs *)ctx->di;
-    BPF_READ(uctx, ctx->di);
-
     //bpf_core_read(&user_sp, sizeof(user_sp), uctx->sp);
+    BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
+
+    struct data_t data = {0};
+    struct task_struct *t;
+
+    t = init_probe_data(&data);
+
+    data->err = check_stack_vma(data, t);
 
     return 0;
 }
