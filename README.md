@@ -54,6 +54,17 @@ using a bpftool for my kernel version. On ubuntu I installed bpftool using
 
 TODO
 
+# Testing
+
+Tests are under 'test' and are currently manual. Running programs normally installed
+and under normal use should _never_ result in a "stack pivot" alert. However the programs
+under 'test' should stack pivot at some point, cause and alert, and if enabled, be killed
+immediately by a SIGKILL from within eBPF.
+
+Build tests with `make`, run the main rust program (found under `target`), and then run
+the test programs under `test`, observing events as they're handled by the main rust program.
+You should see stack pivots are detected in the test programs, and (if enabled) they are killed.
+
 # TODO
 
 * Pull Anthony's research code in
@@ -68,10 +79,7 @@ TODO
 
 # GOTCHAS
 
-* kernel threads (eg: kworker tasks) also go through cgroup_post_fork
-** can probably tell them by newsp in kernel address space, or flags given to clone
-*** cgroup_post_fork event. process id: 21790, thread id: 21790, newsp: 0xffffffffb60cc6a0
-*** root       21790  0.0  0.0      0     0 ?        I    15:09   0:00 [kworker/0:0-events]
+...?
 
 # References
 
