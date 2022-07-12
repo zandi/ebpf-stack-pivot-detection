@@ -91,6 +91,24 @@ fn wake_up_new_task_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     0
 }
 
+fn execve_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
+    // todo process/print data
+    let event = unsafe {
+        *parse_message::<stack_pivot_poc_bss_types::data_t>(data).unwrap()
+    };
+
+    let error_label = match event.err {
+        ERR_TYPE_NONE => "None",
+        ERR_TYPE_UNK_STACK => "Unknown Stack",
+        ERR_TYPE_STACK_PIVOT => "Stack Pivot",
+        _ => "Unknown Error Value",
+    };
+
+    println!("[execve]: tid {} error: {}", event.pid, error_label);
+
+    0
+}
+
 fn main() -> Result<(), Error> {
     
     let skel_builder = StackPivotPocSkelBuilder::default();
@@ -118,6 +136,10 @@ fn main() -> Result<(), Error> {
     .unwrap();
     perf_builder.add(skel.maps().ringbuf_map_new_stack(), move |data| {
         wake_up_new_task_event_handler(data)
+    })
+    .unwrap();
+    perf_builder.add(skel.maps().ringbuf_map_execve(), move |data| {
+        execve_event_handler(data)
     })
     .unwrap();
 

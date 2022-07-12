@@ -78,6 +78,7 @@ EXPORT_TYPE(event_data_t);
 EXPORT_TYPE(clone_data);
 EXPORT_TYPE(do_exit_data);
 EXPORT_TYPE(stack_data);
+EXPORT_TYPE(data_t);
 
 /* Searches backlog of stack VMAs for one that contains the current stack
  * pointer. If none found, then checks SP against VMA of the current task's
@@ -338,7 +339,17 @@ int kprobe_execve(struct pt_regs *ctx)
 
     t = init_probe_data(&data);
 
-    data->err = check_stack_vma(data, t);
+    data.err = check_stack_vma(&data, t);
+
+    // just use raw data_t type for execve (only conveying stack pivot check right now)
+    bpf_ringbuf_output(&BPF_MAP_NAME(execve), &data, sizeof(data), 0);
+
+    if (data.err == ERR_TYPE_STACK_PIVOT)
+    {
+        // kill current task outright
+        // SIGKILL = 9
+        bpf_send_signal(9);
+    }
 
     return 0;
 }
