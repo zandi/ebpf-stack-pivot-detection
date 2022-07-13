@@ -19,6 +19,10 @@ const ERR_TYPE_NONE: i32 = 0;
 const ERR_TYPE_UNK_STACK: i32 = (ERR_LEVEL_WARNING << 12) | 1;
 const ERR_TYPE_STACK_PIVOT: i32 =  (ERR_LEVEL_ALERT << 12) | 1;
 
+const STACK_SRC_SELF: i32 = 0;
+const STACK_SRC_UNK: i32 = -1;
+const STACK_SRC_ERR: i32 = -2;
+
 fn parse_message<T>(data: &[u8]) -> Option<*const T> {
     if data.len() != mem::size_of::<T>() {
         eprintln!(
@@ -109,6 +113,30 @@ fn execve_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     0
 }
 
+fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
+    let event = unsafe {
+        *parse_message::<stack_pivot_poc_bss_types::stack_pivot_event_t>(data).unwrap()
+    };
+
+    let error_label = match event.data.err {
+        ERR_TYPE_NONE => "None",
+        ERR_TYPE_UNK_STACK => "Unknown Stack",
+        ERR_TYPE_STACK_PIVOT => "Stack Pivot",
+        _ => "Unknown Error Value",
+    };
+
+    let source_label = match event.data.stack_src {
+        STACK_SRC_SELF => "Self",
+        STACK_SRC_UNK => "Unknown",
+        STACK_SRC_ERR => "Error",
+        _ => "Unknown Source Value",
+    };
+
+    println!("[stack pivot event]: task: {}:{} event {}, source: {}, sp: {:#x}, vma: [{:#x}, {:#x})", event.data.pid, event.data.tid, error_label, source_label, event.data.sp, event.data.stack_start, event.data.stack_end);
+
+    0
+}
+
 fn main() -> Result<(), Error> {
     
     let skel_builder = StackPivotPocSkelBuilder::default();
@@ -142,10 +170,17 @@ fn main() -> Result<(), Error> {
         execve_event_handler(data)
     })
     .unwrap();
+    perf_builder.add(skel.maps().ringbuf_map_stack_pivot_event(), move |data| {
+        stack_pivot_event_handler(data)
+    })
+    .unwrap();
 
     let ringbuf = perf_builder.build().unwrap();
 
     skel.attach();
+
+    println!("[I] Running! Follow debug output with `sudo less +F /sys/kernel/debug/tracing/trace`");
+    println!("[I] This terminal will only have messages for stack pivot events");
 
     while running.load(Ordering::SeqCst) {
         ringbuf.poll(Duration::from_millis(100));

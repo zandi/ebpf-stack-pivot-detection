@@ -18,6 +18,9 @@
 #define STACK_SRC_UNK -1
 #define STACK_SRC_ERR -2
 
+#define FIND_VMA_SUCCESS 0
+#define FIND_VMA_FAILURE -1
+
 // args for various functions we monitor
 struct clone_user_args {
     ulong clone_flags;
@@ -127,7 +130,7 @@ struct event_data_t {
  * ulong addr           : address to search for
  * ulong *start         : write found range's starting address to this
  * ulong *end           : write found range's ending address to this */
-static void find_vma(struct mm_struct *mm, ulong addr, ulong *start,
+static int find_vma(struct mm_struct *mm, ulong addr, ulong *start,
         ulong *end)
 {
     struct vm_area_struct *tmp;
@@ -153,7 +156,7 @@ static void find_vma(struct mm_struct *mm, ulong addr, ulong *start,
                 // Valid stack pointer
                 *start = vm_start;
                 *end = vm_end;
-                return;
+                return FIND_VMA_SUCCESS;
             }
             BPF_READ(rb_node, rb_node->rb_left);
         } 
@@ -161,7 +164,7 @@ static void find_vma(struct mm_struct *mm, ulong addr, ulong *start,
             BPF_READ(rb_node, rb_node->rb_right);
         }
     }
-    return;
+    return FIND_VMA_FAILURE;
 }
 
 /* Initializes probe data with a time stamp, PID, PPID, and LWP (TID).

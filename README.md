@@ -69,8 +69,6 @@ You should see stack pivots are detected in the test programs, and (if enabled) 
 
 * Pull Anthony's research code in
 * Adapt Anthony's code to our PoC use-case, refactor, etc.
-** get working as-is
-** move stack pivot detection logic fully into eBPF
 ** refactor data structures, event types as necessary (less userland events)
 ** double-check that we pull in updates from Anthony's code
 * write test programs that exhibit stack pivot behavior and call various syscalls/simulated ROP chains

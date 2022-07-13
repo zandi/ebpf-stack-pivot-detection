@@ -5,6 +5,8 @@
 
 #include "utils.h"
 
+//#define SIGKILL_ENABLED 1
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 // struct definitions
@@ -17,10 +19,9 @@ struct stack_data {
 };
 
 // TODO: use this to report detected stack pivot attempts/events to userland
-struct stack_pivot_data_t {
-    pid_t pid; // use kernel terminology
-    pid_t tgid;
-    unsigned long newsp;
+struct stack_pivot_event_t {
+    struct data_t data;
+    // TODO: add only the necessary fields below, based on experience
 };
 
 // maps
@@ -32,16 +33,12 @@ BPF_MAP_DEF(wake_up_new_task)
 BPF_MAP_DEF(cgroup_post_fork)
 BPF_MAP_DEF(do_exit)
 BPF_MAP_DEF(new_stack)
+BPF_MAP_DEF(stack_pivot_event)
 
 // use a single ringbuf map to simplify things for now for the rust side
 // later we'll just have a single ringbuf to report events, and not have a
 // type/ringbuf for every eBPF program
 BPF_MAP_DEF(generic_event)
-
-struct {
-	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 256 * 1024);
-} stack_pivot_events SEC(".maps");
 
 // maps (tgid << 32 | pid) values to observed newsp value from clone args
 struct {
@@ -79,6 +76,7 @@ EXPORT_TYPE(clone_data);
 EXPORT_TYPE(do_exit_data);
 EXPORT_TYPE(stack_data);
 EXPORT_TYPE(data_t);
+EXPORT_TYPE(stack_pivot_event_t);
 
 /* Searches backlog of stack VMAs for one that contains the current stack
  * pointer. If none found, then checks SP against VMA of the current task's
@@ -102,6 +100,7 @@ static int check_stack_vma(struct data_t *data, struct task_struct *t)
     struct stack_data *stack;
     struct mm_struct *mm;
     uint pid;
+    int res;
 
     BPF_READ(pid, t->pid);
     BPF_READ(mm, t->mm);
@@ -121,19 +120,25 @@ static int check_stack_vma(struct data_t *data, struct task_struct *t)
     else {
         data->stack_pid = pid;
         // Not in map, check task's start_stack
-        find_vma(mm, data->start_stack, &data->stack_start, &data->stack_end);
+        res = find_vma(mm, data->start_stack, &data->stack_start, &data->stack_end);
+        if (res == FIND_VMA_FAILURE) {
+            bpf_printk("[check_stack_vma] find_vma failed for data->start_stack");
+        }
         if (data->sp >= data->stack_start && data->sp < data->stack_end) {
             data->stack_src = STACK_SRC_SELF;
             return ERR_TYPE_NONE;
         }
         else {
             // Unknown stack source, use sp's VMA
-            find_vma(mm, data->sp, &data->stack_start, &data->stack_end);
+            res = find_vma(mm, data->sp, &data->stack_start, &data->stack_end);
+            if (res == FIND_VMA_FAILURE) {
+                bpf_printk("[check_stack_vma] find_vma failed for data->sp");
+            }
             if (data->sp >= data->stack_start && data->sp < data->stack_end) {
                 data->stack_src = STACK_SRC_UNK;
                 return ERR_TYPE_UNK_STACK;
             }
-            else { // TODO: is this case even possible? Shouldn't any sp which is valid (doesn't segfault) have a VAM?
+            else { // TODO: is this case even possible? Shouldn't any sp which is valid (doesn't segfault) have a VMA?
                 // sp's VMA not in process memory, possible stack pivot
                 data->stack_src = STACK_SRC_ERR;
                 return ERR_TYPE_STACK_PIVOT;
@@ -159,8 +164,10 @@ static int check_stack_vma(struct data_t *data, struct task_struct *t)
 SEC("kprobe/__x64_sys_clone")
 int kprobe_clone(struct pt_regs *ctx)
 {
-    struct clone_data clone_data = { 0 };
-    struct data_t *data = &clone_data.data;
+    struct clone_user_args clone_args = { 0 };
+    struct stack_pivot_event_t sp_event = { 0 };
+
+    struct data_t *data = &sp_event.data;
     struct pt_regs *uctx;
     struct task_struct *t;
     int *tid_tmp;
@@ -172,19 +179,24 @@ int kprobe_clone(struct pt_regs *ctx)
 
     // sys_clone user args
     uctx = (struct pt_regs *)ctx->di;
-    BPF_READ(clone_data.args.clone_flags, uctx->di);
-    BPF_READ(clone_data.args.newsp, uctx->si);
+    BPF_READ(clone_args.clone_flags, uctx->di);
+    BPF_READ(clone_args.newsp, uctx->si);
 
     BPF_READ(tid_tmp, uctx->dx);
-    bpf_probe_read(&clone_data.args.parent_tid, sizeof(clone_data.args.parent_tid), tid_tmp);
+    bpf_probe_read(&clone_args.parent_tid, sizeof(clone_args.parent_tid), tid_tmp);
     BPF_READ(tid_tmp, uctx->r10);
-    bpf_probe_read(&clone_data.args.child_tid, sizeof(clone_data.args.child_tid), tid_tmp);
+    bpf_probe_read(&clone_args.child_tid, sizeof(clone_args.child_tid), tid_tmp);
 
     BPF_READ(data->sp, uctx->sp);
 
     data->err = check_stack_vma(data, t);
 
-    bpf_ringbuf_output(&BPF_MAP_NAME(clone), &clone_data, sizeof(clone_data), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), data, sizeof(struct data_t), 0);
+
+    bpf_printk("[clone] %d:%d, newsp: %p", data->pid, data->tid, clone_args.newsp);
+    if (data->err == ERR_TYPE_STACK_PIVOT) {
+        bpf_printk("\t***** stack pivot detected! *****");
+    }
 
     return 0;
 }
@@ -198,9 +210,7 @@ int kprobe_clone_ia32(struct pt_regs *ctx)
     return 0;
 }
 
-// I don't think I need this one?
-// TODO: maybe this would be good for _not_ adding a thread stack if
-// the clone fails for some reason, but then we don't have the tid...
+// TODO: basically just for debugging, could disable/remove
 SEC("kretprobe/__x64_sys_clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
@@ -216,9 +226,7 @@ int kretprobe_clone(struct pt_regs *ctx)
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
     BPF_READ(data->retval, ctx->ax);
 
-    // Send to loader
-    bpf_ringbuf_output(&BPF_MAP_NAME(clone_ret), &clone_data,
-            sizeof(clone_data), 0);
+    bpf_printk("[clone return] %d:%d -> %d", data->pid, data->tid, data->retval);
 
     return 0;
 }
@@ -273,13 +281,17 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
         data->stack_start = stack.start;
         data->stack_end = stack.end;
         data->stack_pid = stack.pid;
+
+        bpf_printk("[wake_up_new_task] pid %d new stack: [%#lx, %#lx)", stack.pid, stack.start, stack.end);
     }
     else {
         // TODO: report some kind of error? we should be able to find the VMA
+        bpf_printk("[wake_up_new_task] ERROR: no stack VMA found");
     }
 
+
     // tell the user about a new stack (debug output)
-    bpf_ringbuf_output(&BPF_MAP_NAME(new_stack), &stack, sizeof(stack), 0);
+    //bpf_ringbuf_output(&BPF_MAP_NAME(new_stack), &stack, sizeof(stack), 0);
 
     return 0;
 }
@@ -306,9 +318,7 @@ int kprobe_do_exit(struct pt_regs *ctx)
     bpf_map_delete_elem(&stack_map, &data->tid);
     data->time = bpf_ktime_get_ns();
 
-    // Send to loader (debug output)
-    bpf_ringbuf_output(&BPF_MAP_NAME(do_exit), &do_exit_data,
-            sizeof(do_exit_data), 0);
+    bpf_printk("[do_exit] %d:%d", data->pid, data->tid);
 
     return 0;
 }
@@ -328,27 +338,30 @@ int kprobe_execve(struct pt_regs *ctx)
 {
     struct pt_regs *uctx;
     unsigned long user_sp;
+    struct data_t data = {0};
+    struct task_struct *t;
 
     //uctx = (struct pt_regs *)ctx->di;
     //bpf_core_read(&user_sp, sizeof(user_sp), uctx->sp);
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
-
-    struct data_t data = {0};
-    struct task_struct *t;
+    data.sp = user_sp;
 
     t = init_probe_data(&data);
 
     data.err = check_stack_vma(&data, t);
 
     // just use raw data_t type for execve (only conveying stack pivot check right now)
-    bpf_ringbuf_output(&BPF_MAP_NAME(execve), &data, sizeof(data), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
 
     if (data.err == ERR_TYPE_STACK_PIVOT)
     {
+        bpf_printk("[execve]\n\t***** stack pivot detected! *****");
+    #ifdef SIGKILL_ENABLED
         // kill current task outright
         // SIGKILL = 9
         bpf_send_signal(9);
+    #endif
     }
 
     return 0;
