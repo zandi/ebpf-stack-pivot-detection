@@ -19,6 +19,15 @@ const ERR_TYPE_NONE: i32 = 0;
 const ERR_TYPE_UNK_STACK: i32 = (ERR_LEVEL_WARNING << 12) | 1;
 const ERR_TYPE_STACK_PIVOT: i32 =  (ERR_LEVEL_ALERT << 12) | 1;
 
+
+const ERR_LOOKS_OK: i32 = 0;
+
+const ERR_NO_VMA: i32 = (ERR_LEVEL_WARNING << 12) | 1;
+const ERR_ANCIENT_THREAD: i32 = (ERR_LEVEL_WARNING << 12) | 2;
+
+const ERR_STACK_PIVOT: i32 = (ERR_LEVEL_ALERT << 12) | 1;
+
+
 const STACK_SRC_SELF: i32 = 0;
 const STACK_SRC_UNK: i32 = -1;
 const STACK_SRC_ERR: i32 = -2;
@@ -98,7 +107,7 @@ fn wake_up_new_task_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
 fn execve_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     // todo process/print data
     let event = unsafe {
-        *parse_message::<stack_pivot_poc_bss_types::data_t>(data).unwrap()
+        *parse_message::<stack_pivot_poc_bss_types::slim_data_t>(data).unwrap()
     };
 
     let error_label = match event.err {
@@ -119,9 +128,10 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     };
 
     let error_label = match event.data.err {
-        ERR_TYPE_NONE => "None",
-        ERR_TYPE_UNK_STACK => "Unknown Stack",
-        ERR_TYPE_STACK_PIVOT => "Stack Pivot",
+        ERR_LOOKS_OK => "Ok",
+        ERR_NO_VMA => "No VMA backing stack pointer (???)",
+        ERR_STACK_PIVOT => "Stack Pivot",
+        ERR_ANCIENT_THREAD => "Ancient Thread (cannot check stack)",
         _ => "Unknown Error Value",
     };
 
@@ -132,7 +142,9 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         _ => "Unknown Source Value",
     };
 
-    println!("[stack pivot event]: task: {}:{} event {}, source: {}, sp: {:#x}, vma: [{:#x}, {:#x})", event.data.pid, event.data.tid, error_label, source_label, event.data.sp, event.data.stack_start, event.data.stack_end);
+    if event.data.err == ERR_STACK_PIVOT {
+        println!("[stack pivot event]: task: {}:{} event {}, sp: {:#x}, source {} vma: [{:#x}, {:#x})", event.data.pid, event.data.tid, error_label, event.data.sp, source_label, event.data.stack_start, event.data.stack_end);
+    }
 
     0
 }

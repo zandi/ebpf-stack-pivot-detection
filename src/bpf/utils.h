@@ -1,6 +1,13 @@
 #ifndef UTILS_H_
 #define UTILS_H_
 
+// stolen definitions
+// linux/sched.h
+#define CLONE_VM    0x00000100  /* set if VM shared between processes */
+#define CLONE_THREAD    0x00010000  /* Same thread group? */
+
+// end stolen definitions
+
 #define BUF_SIZE 128
 
 #define ERR_LEVEL_WARNING 1
@@ -9,6 +16,17 @@
 #define ERR_TYPE_NONE 0
 #define ERR_TYPE_UNK_STACK ((ERR_LEVEL_WARNING << 12) | 1)
 #define ERR_TYPE_STACK_PIVOT ((ERR_LEVEL_ALERT << 12) | 1)
+
+
+// our own check_stack_pivot return codes
+#define ERR_LOOKS_OK 0
+
+#define ERR_NO_VMA ((ERR_LEVEL_WARNING << 12) | 1)
+#define ERR_ANCIENT_THREAD ((ERR_LEVEL_WARNING << 12) | 2)
+
+#define ERR_STACK_PIVOT ((ERR_LEVEL_ALERT << 12) | 1)
+
+
 
 #define MAX_RB_NODE_BOUNDS 51
 
@@ -20,6 +38,8 @@
 
 #define FIND_VMA_SUCCESS 0
 #define FIND_VMA_FAILURE -1
+
+typedef unsigned long ulong;
 
 // args for various functions we monitor
 struct clone_user_args {
@@ -64,21 +84,44 @@ struct data_t {
     char buf[BUF_SIZE];
 };
 
+// my slimmed-down version of data_t type to be more efficient
+// still a catch-all struct, so refactor that later
+struct slim_data_t {
+    ulong time;
+    int pid;
+    int tid;
+    int ppid;
+    ulong sp;
+    ulong start_stack;
+    ulong start_stack_addr;
+    ulong task;
+
+    int stack_src;
+    int stack_pid; // pid of parent thread created with newsp
+    ulong stack_start;
+    ulong stack_end;
+
+    int new_pid;
+    int retval;
+
+    int err;
+};
+
 // combine generic data with function-specific args
 struct clone_data {
-    struct data_t data;
+    struct slim_data_t data;
     struct clone_user_args args;
 };
 
 //*
 struct wake_up_new_task_data {
-    struct data_t data;
+    struct slim_data_t data;
     struct wake_up_new_task_args args;
 };
 //*/
 
 struct do_exit_data {
-    struct data_t data;
+    struct slim_data_t data;
     struct do_exit_args args;
 };
 
@@ -170,7 +213,7 @@ static int find_vma(struct mm_struct *mm, ulong addr, ulong *start,
 /* Initializes probe data with a time stamp, PID, PPID, and LWP (TID).
  *
  * Returns a pointer to the current task. */
-struct task_struct *init_probe_data(struct data_t *data)
+struct task_struct *init_probe_data(struct slim_data_t *data)
 {
     struct task_struct *t;
     struct task_struct *real_parent;
