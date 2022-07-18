@@ -3,6 +3,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "util.h"
+
 // boilerplate for functions to make up our rop chain
 #define printfuncname(num) func##num
 
@@ -10,19 +12,6 @@
 void func##num() { \
     puts("func "#num); \
 }
-
-// nifty macros for inline assembly so we can examine our own stack
-#define GET_SP(result) \
-    asm(".intel_syntax noprefix\n" \
-        "mov %0, rsp\n" \
-        :"=a" (result) \
-        );
-
-#define GET_BP(result) \
-    asm(".intel_syntax noprefix\n" \
-        "mov %0, rbp\n" \
-        :"=a" (result) \
-        );
 
 static void *malicious_stack = NULL;
 
