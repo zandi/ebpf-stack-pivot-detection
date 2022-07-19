@@ -52,7 +52,7 @@ outlined by Anthony, using `wake_up_new_task` as a point to observe both the
 new stack pointer, and the new thread's tid.
 
 This is focused on the view of threads from the kernel, so while testing of
-libraries beyond ptrace should happen, if a thread library relies on the
+libraries beyond pthread should happen, if a thread library relies on the
 `clone` system call to implement its threads at the OS level (thus letting the
 kernel handle scheduling, signals, etc.) then this approach should still be
 useful.
@@ -131,7 +131,6 @@ confusion, but is essentially just a change in terminology.
 |----------|--------|
 |   pid    |  tgid  |
 |   tid    |   pid  |
-
 
 # References
 
