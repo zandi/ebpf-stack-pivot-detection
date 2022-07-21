@@ -1,6 +1,6 @@
 use std::io::Error;
 use std::mem;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,16 +21,21 @@ const ERR_TYPE_STACK_PIVOT: i32 =  (ERR_LEVEL_ALERT << 12) | 1;
 
 
 const ERR_LOOKS_OK: i32 = 0;
-
 const ERR_NO_VMA: i32 = (ERR_LEVEL_WARNING << 12) | 1;
 const ERR_ANCIENT_THREAD: i32 = (ERR_LEVEL_WARNING << 12) | 2;
-
 const ERR_STACK_PIVOT: i32 = (ERR_LEVEL_ALERT << 12) | 1;
 
 
 const STACK_SRC_SELF: i32 = 0;
 const STACK_SRC_UNK: i32 = -1;
 const STACK_SRC_ERR: i32 = -2;
+
+// counters for stack pivot check statistics
+static OK_EVENTS: AtomicU32 = AtomicU32::new(0);
+static NO_VMA_EVENTS: AtomicU32 = AtomicU32::new(0);
+static ANCIENT_THREAD_EVENTS: AtomicU32 = AtomicU32::new(0);
+static STACK_PIVOT_EVENTS: AtomicU32 = AtomicU32::new(0);
+static UNKNOWN_EVENTS: AtomicU32 = AtomicU32::new(0);
 
 fn parse_message<T>(data: &[u8]) -> Option<*const T> {
     if data.len() != mem::size_of::<T>() {
@@ -127,6 +132,14 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         *parse_message::<stack_pivot_poc_bss_types::stack_pivot_event_t>(data).unwrap()
     };
 
+    match event.data.err {
+        ERR_LOOKS_OK => OK_EVENTS.fetch_add(1, Ordering::SeqCst),
+        ERR_NO_VMA => NO_VMA_EVENTS.fetch_add(1, Ordering::SeqCst),
+        ERR_STACK_PIVOT => STACK_PIVOT_EVENTS.fetch_add(1, Ordering::SeqCst),
+        ERR_ANCIENT_THREAD => ANCIENT_THREAD_EVENTS.fetch_add(1, Ordering::SeqCst),
+        _ => UNKNOWN_EVENTS.fetch_add(1, Ordering::SeqCst),
+    };
+
     let error_label = match event.data.err {
         ERR_LOOKS_OK => "Ok",
         ERR_NO_VMA => "No VMA backing stack pointer (???)",
@@ -197,6 +210,13 @@ fn main() -> Result<(), Error> {
     while running.load(Ordering::SeqCst) {
         ringbuf.poll(Duration::from_millis(100));
     }
+
+    println!("\n[I] statistics for stack pivot checks:");
+    println!("\tOK_EVENTS: {}", OK_EVENTS.load(Ordering::SeqCst));
+    println!("\tNO_VMA_EVENTS: {}", NO_VMA_EVENTS.load(Ordering::SeqCst));
+    println!("\tANCIENT_THREAD_EVENTS: {}", ANCIENT_THREAD_EVENTS.load(Ordering::SeqCst));
+    println!("\tSTACK_PIVOT_EVENTS: {}", STACK_PIVOT_EVENTS.load(Ordering::SeqCst));
+    println!("\tUNKNOWN_EVENTS: {}", UNKNOWN_EVENTS.load(Ordering::SeqCst));
 
     Ok(())
 }
