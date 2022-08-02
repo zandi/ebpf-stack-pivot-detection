@@ -33,17 +33,20 @@ void run_thread(void *arg)
 
         exit(0);
 
+        //*
+        char *argv[2] = { "./stackpivot.bin", NULL};
+        //*/
         /*
         char *argv[2] = { "./report_rsp.bin", NULL};
+        //*/
         char *envp[1] = { NULL };
         printf("[I] %d:%d child process from non-leader thread, execve'ing `%s`, rsp: %p\n", childpid, childtid, argv[0], childrsp);
         execve(argv[0], argv, envp);
-        //*/
     } else {
         // parent
         int status;
         wait(&status);
-        printf("[I] `id` process exited: %d\n", status);
+        printf("[I] process exited: %d\n", status);
     }
 }
 

