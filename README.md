@@ -89,6 +89,28 @@ Build tests with `make`, and run them before the main userland agent (under
 workloads. We should detect/kill actual stack pivots whenever possible, and
 _never_ kill legitimate processes.
 
+## Building/Running Tests
+
+Some of the test programs require extra toolchains to be installed.
+
+### C#
+
+Follow the instructions from the official Mono website https://www.mono-project.com/download/stable/#download-lin
+
+The Makefile handles building with the `mcs` utility, run with `mono program.exe`.
+
+### Erlang
+
+Install Erlang with `apt install erlang`. An Erlang program can be
+built from the Erlang shell, started with `erl`. A module can be built/loaded
+with `c(module_name).`, then an exported function called with `module_name:function().`.
+
+Exit the Erlang shell with `init:stop().`.
+
+### Golang
+
+Given `program.go`, run with `go run program.go`.
+
 # TODO
 
 * Refactor & simplify code

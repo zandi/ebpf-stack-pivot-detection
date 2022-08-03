@@ -17,6 +17,7 @@ package main
 import (
     "fmt"
     "time"
+    "os"
 )
 
 func f(from string) {
@@ -27,7 +28,7 @@ func f(from string) {
 
 func main() {
 
-    f("direct")
+    fmt.Println("process: ", os.Getpid())
 
     go f("goroutine")
 
