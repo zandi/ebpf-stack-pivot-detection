@@ -23,6 +23,7 @@ const ERR_TYPE_STACK_PIVOT: i32 =  (ERR_LEVEL_ALERT << 12) | 1;
 const ERR_LOOKS_OK: i32 = 0;
 const ERR_NO_VMA: i32 = (ERR_LEVEL_WARNING << 12) | 1;
 const ERR_ANCIENT_THREAD: i32 = (ERR_LEVEL_WARNING << 12) | 2;
+const ERR_POSSIBLE_GOLANG_STACK: i32 = (ERR_LEVEL_WARNING << 12) | 3;
 const ERR_STACK_PIVOT: i32 = (ERR_LEVEL_ALERT << 12) | 1;
 
 
@@ -35,6 +36,7 @@ static OK_EVENTS: AtomicU32 = AtomicU32::new(0);
 static NO_VMA_EVENTS: AtomicU32 = AtomicU32::new(0);
 static ANCIENT_THREAD_EVENTS: AtomicU32 = AtomicU32::new(0);
 static STACK_PIVOT_EVENTS: AtomicU32 = AtomicU32::new(0);
+static POSSIBLE_GOLANG_STACK_EVENTS: AtomicU32 = AtomicU32::new(0);
 static UNKNOWN_EVENTS: AtomicU32 = AtomicU32::new(0);
 
 fn parse_message<T>(data: &[u8]) -> Option<*const T> {
@@ -137,6 +139,7 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         ERR_NO_VMA => NO_VMA_EVENTS.fetch_add(1, Ordering::SeqCst),
         ERR_STACK_PIVOT => STACK_PIVOT_EVENTS.fetch_add(1, Ordering::SeqCst),
         ERR_ANCIENT_THREAD => ANCIENT_THREAD_EVENTS.fetch_add(1, Ordering::SeqCst),
+        ERR_POSSIBLE_GOLANG_STACK => POSSIBLE_GOLANG_STACK_EVENTS.fetch_add(1, Ordering::SeqCst),
         _ => UNKNOWN_EVENTS.fetch_add(1, Ordering::SeqCst),
     };
 
@@ -145,6 +148,7 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         ERR_NO_VMA => "No VMA backing stack pointer (???)",
         ERR_STACK_PIVOT => "Stack Pivot",
         ERR_ANCIENT_THREAD => "Ancient Thread (cannot check stack)",
+        ERR_POSSIBLE_GOLANG_STACK => "Possbile Golang stack",
         _ => "Unknown Error Value",
     };
 
@@ -215,6 +219,7 @@ fn main() -> Result<(), Error> {
     println!("\tOK_EVENTS: {}", OK_EVENTS.load(Ordering::SeqCst));
     println!("\tNO_VMA_EVENTS: {}", NO_VMA_EVENTS.load(Ordering::SeqCst));
     println!("\tANCIENT_THREAD_EVENTS: {}", ANCIENT_THREAD_EVENTS.load(Ordering::SeqCst));
+    println!("\tPOSSIBLE_GOLANG_STACK_EVENTS: {}", POSSIBLE_GOLANG_STACK_EVENTS.load(Ordering::SeqCst));
     println!("\tSTACK_PIVOT_EVENTS: {}", STACK_PIVOT_EVENTS.load(Ordering::SeqCst));
     println!("\tUNKNOWN_EVENTS: {}", UNKNOWN_EVENTS.load(Ordering::SeqCst));
 

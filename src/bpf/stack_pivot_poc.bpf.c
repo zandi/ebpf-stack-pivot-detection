@@ -91,6 +91,11 @@ EXPORT_TYPE(stack_pivot_event_t);
  * For non-main threads which exist before our programs are loaded to track thread creation,
  * we will also fail this lookup. So we need to determine if a thread is 'ancient' and
  * thus not properly tracked by us, or if it's 'recent' and is.
+ *
+ * TODO: explore possibility of golang goroutine edge case. We get false positives
+ * from golang because of how goroutines are implemented/scheduled on different
+ * threads. If these false positives are predictable in some way, we may be able
+ * to make an exception for them.
  */
 static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
 {
@@ -112,13 +117,6 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     data->start_stack_addr = (ulong)(&mm->start_stack);
     data->task = (ulong)t;
 
-    /*
-    data->stack_pid = stack->pid;
-    data->stack_start = stack->start;
-    data->stack_end = stack->end;
-    data->stack_src = stack->source;
-    //*/
-
     // regardless of case, check our map first. We've observed main threads of a thread group (process)
     // which have their stack residing somewhere besides where current->mm->start_stack indicates.
     stack = (struct stack_data *)bpf_map_lookup_elem(&stack_map, &pid);
@@ -136,9 +134,17 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
             data->stack_src = STACK_SRC_SELF;
             return ERR_LOOKS_OK;
         }
+        // special-case for golang (TODO: verify correctness)
+        else if (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff) {
+            data->stack_pid = stack->pid;
+            data->stack_start = found_stack_start;
+            data->stack_end = found_stack_end;
+            data->stack_src = STACK_SRC_SELF;
+            return ERR_POSSIBLE_GOLANG_STACK;
+        }
         else {
             // bad
-            data->stack_pid = pid;
+            data->stack_pid = stack->pid;
             data->stack_start = found_stack_start;
             data->stack_end = found_stack_end;
             data->stack_src = STACK_SRC_SELF;
@@ -169,6 +175,14 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
                 data->stack_src = STACK_SRC_SELF;
                 return ERR_LOOKS_OK;
             }
+            // special-case for golang (TODO: verify correctness)
+            else if (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff) {
+                data->stack_pid = pid;
+                data->stack_start = found_stack_start;
+                data->stack_end = found_stack_end;
+                data->stack_src = STACK_SRC_SELF;
+                return ERR_POSSIBLE_GOLANG_STACK;
+            }
             else {
                 // stack pointer _outside_ the main thread's stack VMA, stack pivot
                 data->stack_pid = pid;
@@ -177,7 +191,7 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
                 data->stack_src = STACK_SRC_SELF;
                 return ERR_STACK_PIVOT;
             }
-                // main thread, start_stack _might_ work (but might also have false positive risk?)
+            // main thread, start_stack _might_ work (but might also have false positive risk?)
         }
         else {
             // non-main thread without a tracked stack region (before we loaded). Pretty sure we have no hope here of being correct
@@ -189,79 +203,6 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
             return ERR_ANCIENT_THREAD;
         }
     }
-
-    /*
-    // case 1: main thread (tid == pid)
-    if (pid == tgid) {
-        // start_stack *should* lead us to the stack VMA. Find this VMA and check if user_sp
-        // is within it.
-        res = find_vma(mm, start_stack, &found_stack_start, &found_stack_end);
-        if (res == FIND_VMA_FAILURE) {
-            // start_stack in task_struct not backed by a vma? Is this just a segfault?
-            bpf_printk("[check_stack_pivot] %d:%d main thread, but mm->start_stack has no VMA?", tgid, pid);
-            data->stack_pid = pid;
-            data->stack_start = 0;
-            data->stack_end = 0;
-            data->stack_src = STACK_SRC_ERR;
-            return ERR_NO_VMA;
-        }
-        bpf_printk("[check_stack_pivot] %d:%d", tgid, pid);
-        bpf_printk("[check_stack_pivot] main thread stack [%lx, %lx)", found_stack_start, found_stack_end);
-        if (found_stack_start <= user_sp && user_sp < found_stack_end) {
-            // stack pointer in stack VMA, everything looks good here
-            data->stack_pid = pid;
-            data->stack_start = found_stack_start;
-            data->stack_end = found_stack_end;
-            data->stack_src = STACK_SRC_SELF;
-            return ERR_LOOKS_OK;
-        }
-        else {
-            // stack pointer _outside_ the main thread's stack VMA, stack pivot
-            data->stack_pid = pid;
-            data->stack_start = found_stack_start;
-            data->stack_end = found_stack_end;
-            data->stack_src = STACK_SRC_SELF;
-            return ERR_STACK_PIVOT;
-        }
-    }
-    // case 2: non-main thread (tid != pid)
-    else {
-        // check if we have a known stack area for this task
-        stack = (struct stack_data *)bpf_map_lookup_elem(&stack_map, &pid);
-        if (stack) {
-            // recent thread where we know the stack region allocated for it
-            found_stack_start = stack->start;
-            found_stack_end = stack->end;
-            bpf_printk("[check_stack_pivot] %d:%d", tgid, pid);
-            bpf_printk("[check_stack_pivot] non-main thread stack [%lx, %lx)", found_stack_start, found_stack_end);
-            if (found_stack_start <= user_sp && user_sp < found_stack_end) {
-                // good
-                data->stack_pid = stack->pid;
-                data->stack_start = found_stack_start;
-                data->stack_end = found_stack_end;
-                data->stack_src = STACK_SRC_SELF;
-                return ERR_LOOKS_OK;
-            }
-            else {
-                // bad
-                data->stack_pid = pid;
-                data->stack_start = found_stack_start;
-                data->stack_end = found_stack_end;
-                data->stack_src = STACK_SRC_SELF;
-                return ERR_STACK_PIVOT;
-            }
-        }
-        else {
-            // ancient thread? (no tracked stack region found)
-            bpf_printk("[check_stack_pivot] %d:%d ancient non-main thread? no recorded stack from clone newsp", tgid, pid);
-            data->stack_pid = pid;
-            data->stack_start = 0;
-            data->stack_end = 0;
-            data->stack_src = STACK_SRC_UNK;
-            return ERR_ANCIENT_THREAD;
-        }
-    }
-    //*/
 }
 
 /* Searches backlog of stack VMAs for one that contains the current stack
@@ -576,22 +517,45 @@ int kprobe_execve(struct pt_regs *ctx)
     // have an entirely different one, and will need to rediscover it. If we don't
     // clean up the tracked stack region here, we'll fail subsequent stack pivot checks
     // for this task.
+    // TODO: actually, only do this on a kretprobe, if execve succeeds
     bpf_map_delete_elem(&stack_map, &data.tid);
-
-    /*
-    if (data.err == ERR_TYPE_STACK_PIVOT)
-    {
-        bpf_printk("[execve]\n\t***** stack pivot detected! *****");
-    #ifdef SIGKILL_ENABLED
-        // kill current task outright
-        // SIGKILL = 9
-        bpf_send_signal(9);
-    #endif
-    }
-    //*/
 
     return 0;
 }
+
+// for debug/testing only, too hot to hook in production
+/*
+SEC("kprobe/__x64_sys_write")
+int handle_write(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    unsigned long user_sp;
+    struct slim_data_t data = {0};
+    struct task_struct *t;
+    int stack_pivot_res;
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(user_sp, uctx->sp);
+    data.sp = user_sp;
+
+    t = init_probe_data(&data);
+
+    bpf_printk("[write] %d:%d", data.pid, data.tid);
+
+    stack_pivot_res = check_stack_pivot(&data, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[write] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", data.sp);
+        }
+    }
+    data.err = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
+
+    return 0;
+}
+//*/
 
 // TODO: fix this, use a proper syscall handling function
 SEC("kprobe/ksys_mmap_pgoff")
