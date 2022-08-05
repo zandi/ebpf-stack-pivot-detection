@@ -12,6 +12,9 @@
 * at different times, thus presenting different stacks (if I understand correctly)
 */
 
+// NOTE: make sure you're using the __x64_sys_write debug hook to check
+// this test, since the goroutines should definitely call write
+
 package main
 
 import (
@@ -21,21 +24,23 @@ import (
 )
 
 func f(from string) {
-    for i := 0; i < 3; i++ {
-        fmt.Println(from, ":", i)
+    fmt.Println(from)
+    for i := 0; i < 10; i++ {
+        go func(num int) {
+            var buf [4096 * 10]int; // just to take up stack space
+            buf[ (10*i) % 10 ] = i
+            fmt.Println(from, ": ", num)
+        }(i)
     }
 }
 
 func main() {
-
     fmt.Println("process: ", os.Getpid())
 
-    go f("goroutine")
-
-    go func(msg string) {
-        fmt.Println(msg)
-    }("going")
+    for i := 0; i < 100; i++ {
+        go f(fmt.Sprintf("goroutine %d", i))
+    }
 
     time.Sleep(time.Second)
-    fmt.Println("done")
+    fmt.Println("process", os.Getpid(), "done")
 }
