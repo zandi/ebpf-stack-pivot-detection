@@ -25,14 +25,6 @@ struct stack_pivot_event_t {
 };
 
 // maps
-BPF_MAP_DEF(register_kprobe)
-BPF_MAP_DEF(execve)
-BPF_MAP_DEF(clone)
-BPF_MAP_DEF(clone_ret)
-BPF_MAP_DEF(wake_up_new_task)
-BPF_MAP_DEF(cgroup_post_fork)
-BPF_MAP_DEF(do_exit)
-BPF_MAP_DEF(new_stack)
 BPF_MAP_DEF(stack_pivot_event)
 
 // use a single ringbuf map to simplify things for now for the rust side
@@ -71,11 +63,6 @@ struct {
 // force exporting types to rust skeleton
 #define EXPORT_TYPE(t) \
     struct t __unused_##t = {0}
-EXPORT_TYPE(event_data_t);
-EXPORT_TYPE(clone_data);
-EXPORT_TYPE(do_exit_data);
-EXPORT_TYPE(stack_data);
-EXPORT_TYPE(slim_data_t);
 EXPORT_TYPE(stack_pivot_event_t);
 
 /* our version of the sp checking routine
@@ -205,75 +192,6 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     }
 }
 
-/* Searches backlog of stack VMAs for one that contains the current stack
- * pointer. If none found, then checks SP against VMA of the current task's
- * start_stack. Returns a warning error code if SP is in a VMA that is 
- * not known to us as a valid stack VMA. If SP is not in any VMA of the
- * current task, returns an alert error code.
- *
- * struct slim_data_t *data      sp should be set before calling this function;
- *                          stack_start and stack_end are updated
- * struct task_struct *t    pointer to current user thread's task_struct
- *
- * Note that any child threads created by a fork will inherit their parent's
- * stack area. Hence, threads created with a non-null newsp will pass an
- * unflagged stack area down to forked child threads, starting a legacy of 
- * threads with unflagged stack areas. This can continue indefinitely, with 
- * nested fork calls in user threads. Unflagged stack area progenitors going 
- * back further than the parent are rare in the wild. Nevertheless it is easy 
- * to demonstrate this. */
-static int check_stack_vma(struct slim_data_t *data, struct task_struct *t)
-{
-    struct stack_data *stack;
-    struct mm_struct *mm;
-    uint pid;
-    int res;
-
-    BPF_READ(pid, t->pid);
-    BPF_READ(mm, t->mm);
-    BPF_READ(data->start_stack, mm->start_stack);
-    data->start_stack_addr = (ulong)(&mm->start_stack);
-    data->task = (ulong)t;
-
-    // Check stack map first
-    stack = (struct stack_data *)bpf_map_lookup_elem(&stack_map, &pid);
-    if (stack && data->sp >= stack->start && data->sp < stack->end) {
-        data->stack_pid = stack->pid;
-        data->stack_start = stack->start;
-        data->stack_end = stack->end;
-        data->stack_src = stack->source;
-        return ERR_TYPE_NONE;
-    }
-    else {
-        data->stack_pid = pid;
-        // Not in map, check task's start_stack
-        res = find_vma(mm, data->start_stack, &data->stack_start, &data->stack_end);
-        if (res == FIND_VMA_FAILURE) {
-            bpf_printk("[check_stack_vma] find_vma failed for data->start_stack");
-        }
-        if (data->sp >= data->stack_start && data->sp < data->stack_end) {
-            data->stack_src = STACK_SRC_SELF;
-            return ERR_TYPE_NONE;
-        }
-        else {
-            // Unknown stack source, use sp's VMA
-            res = find_vma(mm, data->sp, &data->stack_start, &data->stack_end);
-            if (res == FIND_VMA_FAILURE) {
-                bpf_printk("[check_stack_vma] find_vma failed for data->sp");
-            }
-            if (data->sp >= data->stack_start && data->sp < data->stack_end) {
-                data->stack_src = STACK_SRC_UNK;
-                return ERR_TYPE_UNK_STACK;
-            }
-            else { // TODO: is this case even possible? Shouldn't any sp which is valid (doesn't segfault) have a VMA?
-                // sp's VMA not in process memory, possible stack pivot
-                data->stack_src = STACK_SRC_ERR;
-                return ERR_TYPE_STACK_PIVOT;
-            }
-        }
-    }
-}
-
 // eBPF programs for keeping track of thread stack areas
 // NOTE: some of these are also syscalls where we'll need
 // to check for a stack pivot
@@ -323,11 +241,6 @@ int kprobe_clone(struct pt_regs *ctx)
     bpf_printk("[clone]\tclone_vm: %d, clone_thread: %d", has_clone_vm, has_clone_thread);
     bpf_printk("[clone]\tnewsp: %lx", clone_args.newsp);
 
-    //data->err = check_stack_vma(data, t);
-
-    // TODO: we're having weird issues here. Lots of false positives.
-    // for a process which has a non-leader thread fork+execve something else
-    //*
     stack_pivot_res = check_stack_pivot(data, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[clone]\tnot-ok stack pivot check: %x", stack_pivot_res);
@@ -338,13 +251,6 @@ int kprobe_clone(struct pt_regs *ctx)
     data->err = stack_pivot_res;
 
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), data, sizeof(struct slim_data_t), 0);
-    //*/
-
-    /*
-    if (data->err == ERR_TYPE_STACK_PIVOT) {
-        bpf_printk("\t***** stack pivot detected! *****");
-    }
-    //*/
 
     return 0;
 }
@@ -437,10 +343,6 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
         bpf_printk("[wake_up_new_task] ERROR: no stack VMA found");
     }
 
-
-    // tell the user about a new stack (debug output)
-    //bpf_ringbuf_output(&BPF_MAP_NAME(new_stack), &stack, sizeof(stack), 0);
-
     return 0;
 }
 
@@ -490,15 +392,12 @@ int kprobe_execve(struct pt_regs *ctx)
     struct task_struct *t;
     int stack_pivot_res;
 
-    //uctx = (struct pt_regs *)ctx->di;
-    //bpf_core_read(&user_sp, sizeof(user_sp), uctx->sp);
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
     data.sp = user_sp;
 
     t = init_probe_data(&data);
 
-    //data.err = check_stack_vma(&data, t);
     bpf_printk("[execve] %d:%d", data.pid, data.tid);
 
     stack_pivot_res = check_stack_pivot(&data, t);
