@@ -1,3 +1,4 @@
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -101,9 +102,31 @@ void do_stack_pivot()
     return;
 }
 
+void do_wait_thread(pthread_attr_t *attr)
+{
+    int res;
+    pthread_t tid;
+
+    printf("[I] creating thread...\n");
+    res = pthread_create(&tid, attr, (void *)do_stack_pivot, NULL);
+    if (res != 0) {
+        perror("pthread_create");
+        exit(1);
+    }
+
+    res = pthread_join(tid, NULL);
+    if (res != 0) {
+        perror("pthread_join");
+        exit(1);
+    }
+    printf("[I] thread %ld joined\n", tid);
+}
+
 int main(int argc, char **argv)
 {
+    int res;
     pid_t pid, tid;
+    pthread_attr_t attr = {};
 
     pid = getpid();
     tid = gettid();
@@ -118,7 +141,22 @@ int main(int argc, char **argv)
 
     printf("[I] malicious stack allocated in page beginning at %p\n", malicious_stack);
 
-    do_stack_pivot();
+    res = pthread_attr_init(&attr);
+    if (res != 0) {
+        perror("pthread_attr_init");
+        exit(1);
+    }
+
+    do_wait_thread(&attr);
+
+    do_wait_thread(&attr);
+
+    res = pthread_attr_destroy(&attr);
+    if (res != 0) {
+        perror("pthread_attr_destroy");
+        exit(1);
+    }
+    //do_stack_pivot();
 
     return 0;
 }
