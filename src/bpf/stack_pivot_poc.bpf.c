@@ -422,6 +422,68 @@ int kprobe_execve(struct pt_regs *ctx)
     return 0;
 }
 
+SEC("kprobe/__x64_sys_mmap")
+int kprobe_mmap(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    unsigned long user_sp;
+    struct slim_data_t data = {0};
+    struct task_struct *t;
+    int stack_pivot_res;
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(user_sp, uctx->sp);
+    data.sp = user_sp;
+
+    t = init_probe_data(&data);
+
+    bpf_printk("[mmap] %d:%d", data.pid, data.tid);
+
+    stack_pivot_res = check_stack_pivot(&data, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[mmap] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", data.sp);
+        }
+    }
+    data.err = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
+
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_mprotect")
+int kprobe_mprotect(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    unsigned long user_sp;
+    struct slim_data_t data = {0};
+    struct task_struct *t;
+    int stack_pivot_res;
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(user_sp, uctx->sp);
+    data.sp = user_sp;
+
+    t = init_probe_data(&data);
+
+    bpf_printk("[mprotect] %d:%d", data.pid, data.tid);
+
+    stack_pivot_res = check_stack_pivot(&data, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[mprotect] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", data.sp);
+        }
+    }
+    data.err = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
+
+    return 0;
+}
+
 // for debug/testing only, too hot to hook in production
 /*
 SEC("kprobe/__x64_sys_write")
