@@ -427,6 +427,8 @@ int kprobe_mmap(struct pt_regs *ctx)
 {
     struct pt_regs *uctx;
     unsigned long user_sp;
+    unsigned long prot;
+
     struct slim_data_t data = {0};
     struct task_struct *t;
     int stack_pivot_res;
@@ -434,6 +436,13 @@ int kprobe_mmap(struct pt_regs *ctx)
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
     data.sp = user_sp;
+
+    // heuristic: only worry about executable pages (rdx)
+    // (cuts down on events)
+    BPF_READ(prot, uctx->dx);
+    if (prot & PROT_EXEC == 0) {
+        return 0;
+    }
 
     t = init_probe_data(&data);
 
@@ -458,6 +467,8 @@ int kprobe_mprotect(struct pt_regs *ctx)
 {
     struct pt_regs *uctx;
     unsigned long user_sp;
+    unsigned long prot;
+
     struct slim_data_t data = {0};
     struct task_struct *t;
     int stack_pivot_res;
@@ -465,6 +476,13 @@ int kprobe_mprotect(struct pt_regs *ctx)
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
     data.sp = user_sp;
+
+    // heuristic: only worry about executable pages (rdx)
+    // (cuts down on events)
+    BPF_READ(prot, uctx->dx);
+    if (prot & PROT_EXEC == 0) {
+        return 0;
+    }
 
     t = init_probe_data(&data);
 

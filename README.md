@@ -65,7 +65,9 @@ using a bpftool for my kernel version. On ubuntu I installed bpftool using
 `apt install linux-tools-`uname -r``.
 
 You can then build with `cargo build`. The `build.rs` file will include
-the bpf program building automatically.
+the bpf program building automatically. You will also need to install the
+`rustfmt` utility for the libbpf-rs crate to build the rust skeleton for
+the eBPF object.
 
 # Running
 
