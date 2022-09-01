@@ -9,6 +9,15 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
+/* Chosen based on observing false positives.
+firefox 104.0 on Ubuntu 22.04 LTS, 5.15.0-46-generic
+
+rsp:       0x00007fc6e5708f48
+vma start: 0x00007fff402f2000
+common:    0xffffffc000000000
+*/
+#define COMPARISON_MASK 0xffffff8000000000
+
 // struct definitions
 
 struct stack_data {
@@ -111,9 +120,12 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
         // recent thread where we know the stack region allocated for it
         found_stack_start = stack->start;
         found_stack_end = stack->end;
+
         bpf_printk("[check_stack_pivot] %d:%d", tgid, pid);
         bpf_printk("[check_stack_pivot] tracked thread stack [%lx, %lx)", found_stack_start, found_stack_end);
-        if (found_stack_start <= user_sp && user_sp < found_stack_end) {
+        //if (found_stack_start <= user_sp && user_sp < found_stack_end) {
+        // heuristic for 'reasonably close' based on observed false positives
+        if ( ((user_sp ^ found_stack_start) & COMPARISON_MASK) == 0) {
             // good
             data->stack_pid = stack->pid;
             data->stack_start = found_stack_start;
@@ -121,7 +133,7 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
             data->stack_src = STACK_SRC_SELF;
             return ERR_LOOKS_OK;
         }
-        // special-case for golang (TODO: verify correctness)
+        // special-case for golang (TODO: verify correctness with golang runtime)
         else if (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff) {
             data->stack_pid = stack->pid;
             data->stack_start = found_stack_start;
@@ -152,9 +164,11 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
                 data->stack_src = STACK_SRC_ERR;
                 return ERR_NO_VMA;
             }
+            // false positives here (hasn't happened yet)
             bpf_printk("[check_stack_pivot] %d:%d", tgid, pid);
             bpf_printk("[check_stack_pivot] main thread, untracked, start_stack vma [%lx, %lx)", found_stack_start, found_stack_end);
-            if (found_stack_start <= user_sp && user_sp < found_stack_end) {
+            //if (found_stack_start <= user_sp && user_sp < found_stack_end) {
+            if ( ((user_sp ^ found_stack_start) & COMPARISON_MASK) == 0) {
                 // stack pointer in stack VMA, everything looks good here
                 data->stack_pid = pid;
                 data->stack_start = found_stack_start;
