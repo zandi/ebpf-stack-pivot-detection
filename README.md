@@ -59,6 +59,24 @@ useful.
 
 # Building
 
+## Dependencies
+
+You'll need (at least) the following packages to build, based on Ubuntu 20.04/22.04 LTS.
+Some may already be installed, or have to be explicitly installed.
+
+```
+build-essential
+pkg-config
+libelf-dev
+zlib1g-dev
+clang
+cargo
+rustfmt
+linux-tools-`uname -r`
+```
+
+## Build Process
+
 First you'll need the correct vmlinux.h file for your running kernel. I
 generated mine with `bpftool btf dump file /sys/kernel/btf/vmlinux format c`,
 using a bpftool for my kernel version. On ubuntu I installed bpftool using 
