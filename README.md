@@ -119,6 +119,21 @@ Follow the instructions from the official Mono website https://www.mono-project.
 
 The Makefile handles building with the `mcs` utility, run with `mono program.exe`.
 
+Here is running the "csharp_task_example.cs" test
+```
+$ mono csharp_task_example.exe
+pid 5078
+Creating 100 Tasks
+Starting 100 Tasks
+Waiting for 100 Tasks
+Task=1, obj=0, Thread=4
+Task=2, obj=1, Thread=5
+Task=3, obj=2, Thread=6
+Task=4, obj=3, Thread=5
+Task=5, obj=4, Thread=4
+...
+```
+
 ### Erlang
 
 Install Erlang with `apt install erlang`. An Erlang program can be
@@ -127,9 +142,49 @@ with `c(module_name).`, then an exported function called with `module_name:funct
 
 Exit the Erlang shell with `init:stop().`.
 
+
+Here is running the "erlang_process.erl" test.
+```
+$ erl
+Erlang/OTP 24 [erts-12.2.1] [source] [64-bit] [smp:2:2] [ds:2:2:10] [async-threads:1] [jit]
+
+Eshell V12.2.1  (abort with ^G)
+1> c(erlang_process).
+{ok,erlang_process}
+2> erlang_process:start().
+<0.87.0>"hello" "process"
+<0.88.0>"hello" "forloop"
+<0.89.0>"hello" "forloop"
+<0.90.0>"hello" "forloop"
+<0.91.0>"hello" "forloop"
+<0.92.0>"hello" "forloop"
+[1,1,1,1,1]
+3> init:stop().
+ok
+4>
+$
+```
+
 ### Golang
 
 Given `program.go`, run with `go run program.go`.
+
+### Kotlin + GraalVM
+
+Install the `kotlinc` compiler. On Ubuntu this is in the `kotlin` package.
+Then follow the instructions to download + install GraalVM
+https://www.graalvm.org/downloads/
+
+Enable using GraalVM by running `source use_graalvm.sh` in the tests directory.
+This is covered in the install instructions, adding the GraalVM install
+directory to PATH and JAVA_HOME. This way we can enable as necessary, rather
+than system-wide.
+
+Install the `native-image` plugin using the GraalVM Updater with `gu install
+native-image`. This is for building a native ELF executable from a jar file.
+
+You can make sure you're using the GraalVM in a shell by running `java -version`
+and making sure "GraalVM" appears in the output.
 
 # TODO
 
