@@ -186,6 +186,20 @@ native-image`. This is for building a native ELF executable from a jar file.
 You can make sure you're using the GraalVM in a shell by running `java -version`
 and making sure "GraalVM" appears in the output.
 
+#### Gradle-based build process
+
+Seems like using Gradle is better for incorporating dependencies, which it
+seems we have to do for coroutines in Kotlin.
+
+We need to install Gradle from our usual repositories, then get an updated
+wrapper so that we can _actually_ use an up-to-date Gradle that's compatible
+with everything we'll be using. Run `gradle wrapper --gradle-version 7.5.1`
+in the project directory to get a newer version of gradle. Then we can
+use `./gradlew` for this project to build an run.
+
+Now we can build a native image with `./gradlew nativeBuild`, and find the
+result in the `app/build/native/nativeBuild/` directory.
+
 # TODO
 
 * Refactor & simplify code

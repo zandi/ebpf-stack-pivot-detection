@@ -21,7 +21,7 @@ CSHARP_BINS := $(patsubst %.cs,%.exe,$(CSHARP_SRCS))
 
 .PHONY: all clean
 
-all: $(RAW) $(C_BINS) $(CSHARP_BINS) $(KOTLIN_BINS)
+all: $(RAW) $(C_BINS) $(CSHARP_BINS)
 
 %.elf: %.s
 	@$(CC) $(SHELLCODE_FLAGS) $< -o $@
@@ -43,5 +43,5 @@ all: $(RAW) $(C_BINS) $(CSHARP_BINS) $(KOTLIN_BINS)
 %.native: %.jar
 	native-image -jar $< $@
 
-clean: $(ELFS) $(RAW) $(C_BINS) $(CSHARP_BINS) $(KOTLIN_BINS)
+clean: $(ELFS) $(RAW) $(C_BINS) $(CSHARP_BINS)
 	@rm -f $^
