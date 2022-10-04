@@ -113,8 +113,57 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     data->start_stack_addr = (ulong)(&mm->start_stack);
     data->task = (ulong)t;
 
-    // regardless of case, check our map first. We've observed main threads of a thread group (process)
-    // which have their stack residing somewhere besides where current->mm->start_stack indicates.
+    // redone-redone check: try anthony's approach.
+    // - check start_stack vma
+    // - check stack map
+
+    // TODO: verify correctness against golang runtime/extensive testing
+    if (   (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff)
+        || (0xc420000000 <= user_sp && user_sp <= 0xc420ffffff) ) {
+        data->stack_pid = stack->pid;
+        data->stack_start = found_stack_start;
+        data->stack_end = found_stack_end;
+        data->stack_src = STACK_SRC_SELF;
+        return ERR_POSSIBLE_GOLANG_STACK;
+    }
+
+    res = find_vma_range(mm, start_stack, &found_stack_start, &found_stack_end);
+    if (res == FIND_VMA_FAILURE) {
+        // start_stack in task_struct not backed by a vma? Is this just a segfault?
+        bpf_printk("[check_stack_pivot] %d:%d mm->start_stack has no VMA?", tgid, pid);
+        data->stack_pid = pid;
+        data->stack_start = 0;
+        data->stack_end = 0;
+        data->stack_src = STACK_SRC_ERR;
+        return ERR_NO_VMA;
+    }
+    res = find_vma_range(mm, user_sp, &sp_vma_start, &sp_vma_end);
+    if (res == FIND_VMA_FAILURE) {
+        bpf_printk("[check_stack_pivot] %d:%d sp has no VMA?", tgid, pid);
+        data->stack_pid = pid;
+        data->stack_start = 0;
+        data->stack_end = 0;
+        data->stack_src = STACK_SRC_ERR;
+        return ERR_NO_VMA;
+    }
+
+    bpf_printk("[check_stack_pivot] %d:%d", tgid, pid);
+    bpf_printk("[check_stack_pivot] mm->start_stack vma [%lx, %lx)", found_stack_start, found_stack_end);
+    bpf_printk("[check_stack_pivot] \tvma size: %lx", found_stack_end - found_stack_start);
+    bpf_printk("[check_stack_pivot] user_sp vma [%lx, %lx)", sp_vma_start, sp_vma_end);
+    bpf_printk("[check_stack_pivot] \tvma size: %lx", sp_vma_end - sp_vma_start);
+
+    // check if sp is in this found start_stack vma (thread group leader)
+    if (found_stack_start <= user_sp && user_sp < found_stack_end) {
+        // stack pointer in stack VMA, everything looks good here
+        data->stack_pid = pid;
+        data->stack_start = found_stack_start;
+        data->stack_end = found_stack_end;
+        data->stack_src = STACK_SRC_SELF;
+        return ERR_LOOKS_OK;
+    }
+
+    // check stack map
     stack = (struct stack_data *)bpf_map_lookup_elem(&stack_map, &pid);
     if (stack) {
         // recent thread where we know the stack region allocated for it
@@ -269,6 +318,73 @@ int kprobe_clone(struct pt_regs *ctx)
     return 0;
 }
 
+SEC("kprobe/__x64_sys_clone3")
+int kprobe_clone3(struct pt_regs *ctx)
+{
+    struct clone_user_args clone_args = { 0 };
+    struct stack_pivot_event_t sp_event = { 0 };
+
+    struct clone_args *uargs;
+    struct clone_args local_uargs = { 0 };
+    size_t size;
+
+    ulong clone_flags;
+    ulong new_stack;
+    u64 stack_size;
+
+    struct slim_data_t *data = &sp_event.data;
+    struct pt_regs *uctx;
+    struct task_struct *t;
+    struct mm_struct *mm;
+    struct stack_data stack = { 0 };
+
+    t = init_probe_data(data);
+
+    if (t->flags & PF_KTHREAD)
+        return 0;
+
+    BPF_READ(mm, t->mm);
+
+    // get the flags/stack from uargs struct
+    // CLONE_VM flag implies we must have stack provided in uargs
+
+    // load args
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(uargs, uctx->di);
+    BPF_READ(size, uctx->si);
+    bpf_probe_read(&local_uargs, sizeof(local_uargs), uargs);
+
+    clone_args.clone_flags = local_uargs.flags;
+    clone_args.newsp = local_uargs.stack;
+    stack_size = local_uargs.stack_size;
+
+    find_vma_range(mm, clone_args.newsp, &stack.start, &stack.end);
+
+    int has_clone_vm = (clone_args.clone_flags & CLONE_VM) ? 1 : 0;
+    int has_clone_vfork = (clone_args.clone_flags & CLONE_VFORK) ? 1 : 0;
+    int has_clone_thread = (clone_args.clone_flags & CLONE_THREAD) ? 1 : 0;
+
+    bpf_printk("[clone3] %d:%d, clone_vm: %d", data->pid, data->tid, has_clone_vm);
+    bpf_printk("\tuargs: %lx, size: %d", uargs, size);
+    bpf_printk("\tflags: %lx, newsp: %lx, stack size: %lx", clone_args.clone_flags, clone_args.newsp, stack_size);
+    bpf_printk("\tnew stack vma: [%lx, %lx)", stack.start, stack.end);
+
+    // observed false positive case from `apt instal` on Ubuntu 22.04
+    // mmap_mprotect case exhibits clone_vm and clone_thread (among others)
+    // but handling that mmap_mprotect case introduces worse false positives...
+    //if (has_clone_vm && (has_clone_vfork || has_clone_thread)) {
+    if (has_clone_vm && has_clone_vfork) {
+        bpf_printk("\t*** observed false positive case. Adding caller-specified stack to map ***");
+        u32 tid = data->tid; // tid is unique, safe to use to identify tasks (threads)
+        int res = bpf_map_update_elem(&clone3_edgecase, &tid, &stack, BPF_NOEXIST);
+        if (res < 0) {
+            bpf_printk("\tERROR: unable to add stack info to clone3_edgecase map");
+        }
+    }
+
+    return 0;
+}
+
 // if we need to kprobe like this, we'll have to make sure we catch
 // all possible entrypoints so we aren't evaded
 // TODO: verify we can reach this (int 0x80?)
@@ -333,24 +449,61 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
     BPF_READ(mm, new_task->mm);
     BPF_READ(data->start_stack, mm->start_stack);
     wake_up_new_task_data.args.task = new_task;
+    stack.pid = data->new_pid;
+
+    // handle clone3 edge-case. Our normal fork_frame inspection gets us
+    // the wrong VMA in this case, so we get it directly from clone3 entry
+    void *clone3_stack = bpf_map_lookup_elem(&clone3_edgecase, &(data->tid));
+    if (clone3_stack != NULL) {
+        bpf_printk("[wake_up_new_task] pid %d", stack.pid);
+        bpf_printk("\tfrom clone3 sp: %lx, vma: [%lx, %lx)", data->sp, stack.start, stack.end);
+        /* TODO: testing sp == vma.start edge-case detection
+        res = bpf_map_update_elem(&stack_map, &data->new_pid, clone3_stack, BPF_NOEXIST);
+        if (res < 0) {
+            bpf_printk("[wake_up_new_task] ERROR: failed to write clone3 info to stack_map");
+        }
+        */
+        res = bpf_map_delete_elem(&clone3_edgecase, &(data->tid));
+        if (res < 0) {
+            bpf_printk("[wake_up_new_task] ERROR: failed to remove clone3 info from clone3_edgecase");
+        }
+
+        /* TODO: testing sp == vma.start edge-case detection
+        return 0;
+        */
+    }
 
     /* Get stack VMA using the new task's pt_regs->sp. In kernels >= 4.9 
      * the new task's pt_regs is saved to the regs field in a fork_frame
      * struct. This fork_frame is saved to the new task's thread.sp field. In 
      * kernels < 4.9 pt_regs is saved directly to thread.sp. */
 
+    bpf_printk("[wake_up_new_task] pid %d", stack.pid);
+
     BPF_READ(fork_frame, new_task->thread.sp);
     BPF_READ(data->sp, fork_frame->regs.sp);
-    find_vma(mm, data->sp, &stack.start, &stack.end);
-    stack.pid = data->new_pid;
+    find_vma_range(mm, data->sp, &stack.start, &stack.end);
     if (stack.start && stack.end) {
+        if (data->sp == stack.start) {
+            bpf_printk("\t*** sp initialized to beginning of VMA! in practice it will reside in the *previous* VMA to the one we've found. Adjusting... ***");
+            // current gross hack: decrement observed fork_frame sp by 8, find _that_ vma,
+            // and use that for the tracked stack. Would be nicer to use vma->vm_prev,
+            // but we need to write a helper to get us the whole vma object to do that.
+            ulong prev_vma_start, prev_vma_end;
+            find_vma_range(mm, (data->sp - 8), &stack.start, &stack.end);
+        }
+
+        // NOTE: apparently we track the new task's stack based on sp, regardless
+        // of anything else? This at least is incorrect in some clone3-based cases
+        // observed using CLONE_VM and CLONE_VFORK
+        bpf_printk("\tfrom fork_frame sp: %lx, vma: [%lx, %lx)", data->sp, stack.start, stack.end);
+
         // Update stack map with new thread stack info
-        bpf_map_update_elem(&stack_map, &data->new_pid, &stack, BPF_NOEXIST);
         data->stack_start = stack.start;
         data->stack_end = stack.end;
         data->stack_pid = stack.pid;
 
-        bpf_printk("[wake_up_new_task] pid %d new stack: [%lx, %lx)", stack.pid, stack.start, stack.end);
+        bpf_map_update_elem(&stack_map, &data->new_pid, &stack, BPF_NOEXIST);
     }
     else {
         // TODO: report some kind of error? we should be able to find the VMA

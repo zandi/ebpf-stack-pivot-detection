@@ -177,7 +177,7 @@ struct event_data_t {
  * ulong addr           : address to search for
  * ulong *start         : write found range's starting address to this
  * ulong *end           : write found range's ending address to this */
-static int find_vma(struct mm_struct *mm, ulong addr, ulong *start,
+static int find_vma_range(struct mm_struct *mm, ulong addr, ulong *start,
         ulong *end)
 {
     struct vm_area_struct *tmp;
