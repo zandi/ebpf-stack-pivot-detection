@@ -128,6 +128,18 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     //    stack not tracked in map => ancient thread, fail open (can't conclude good/bad)
     // special case: hardcoded exception regions for golang
 
+    // redone-redone-redone check.
+    // we've observed cases where our stack pointer in the thread group leader
+    // is either in the VMA found via mm->start_stack, or a tracked region (special edge
+    // cases). Loosen the check (at least for now) to allow for a 'valid' stack
+    // region to be 1) a tracked region for this task or 2) a golang exception region
+    // or 3) a region discovered by mm->start_stack
+    //
+    // This is less precise than I like, but we can run with it for now, until we
+    // get at the root of why some thread group leaders have a special stack
+    // region tracked when we should fall back to the mm->start_stack region, meaning
+    // we shouldn't be tracking any region for that thread group leader.
+
     // TODO: verify correctness against golang runtime/extensive testing
     if (   (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff)
         || (0xc420000000 <= user_sp && user_sp <= 0xc420ffffff) ) {
@@ -174,23 +186,26 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     if (pid == tgid) {
 
         // check if sp is in this found start_stack vma (thread group leader)
-        unsigned long stack_start, stack_end;
         if (stack) {
             // edge case where sp is initially at start of a VMA.  we add a
             // tracked region in wake_up_new_task because the VMA we get from
             // mm->start_stack will in practice be wrong, so we have to
             // manually adjust.
-            stack_start = stack->start;
-            stack_end = stack->end;
-            bpf_printk("[check_stack_pivot] tracked thread stack [%lx, %lx)", stack_start, stack_end);
+            // 
+            // Also, loosen the check here to handle rare cases where we track
+            // a region (mistakenly) but sp resides in mm->start_stack's vma.
+            bpf_printk("[check_stack_pivot] tracked thread stack [%lx, %lx)", stack->start, stack->end);
+            if (   (stack->start <= user_sp && user_sp < stack->end)
+                || (found_stack_start <= user_sp && user_sp < found_stack_end)) {
+                // OK case
+                data->stack_pid = pid;
+                data->stack_start = found_stack_start;
+                data->stack_end = found_stack_end;
+                data->stack_src = STACK_SRC_SELF;
+                return ERR_LOOKS_OK;
+            }
         }
-        else {
-            stack_start = found_stack_start;
-            stack_end = found_stack_end;
-        }
-
-        bpf_printk("[check_stack_pivot] assuming stack is [%lx, %lx)", stack_start, stack_end);
-        if (stack_start <= user_sp && user_sp < stack_end) {
+        else if (found_stack_start <= user_sp && user_sp < found_stack_end) {
             // stack pointer in stack VMA, everything looks good here
             data->stack_pid = pid;
             data->stack_start = found_stack_start;
