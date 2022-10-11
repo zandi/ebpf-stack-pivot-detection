@@ -27,19 +27,6 @@ struct stack_pivot_event_t {
 // maps
 BPF_MAP_DEF(stack_pivot_event)
 
-// use a single ringbuf map to simplify things for now for the rust side
-// later we'll just have a single ringbuf to report events, and not have a
-// type/ringbuf for every eBPF program
-BPF_MAP_DEF(generic_event)
-
-// maps (tgid << 32 | pid) values to observed newsp value from clone args
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 65536); // no idea what a sane value is
-    __type(key, u64); // in (tgid, pid) format as given by bpf helper
-    __type(value, u64);
-} thread_stacks SEC(".maps");
-
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
     __uint(max_entries, 1);
