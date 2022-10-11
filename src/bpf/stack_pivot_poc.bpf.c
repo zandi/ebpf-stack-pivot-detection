@@ -27,12 +27,14 @@ struct stack_pivot_event_t {
 // maps
 BPF_MAP_DEF(stack_pivot_event)
 
+/*
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_HASH);
     __uint(max_entries, 1);
     __type(key, u64);
     __type(value, struct stack_data);
 } clone3_edgecase SEC(".maps");
+*/
 
 /* Backlog of new stack pointers for individual process threads. If a thread
  * was created with its own stack area (ie. newsp is non-null in a call to
@@ -371,6 +373,7 @@ int kprobe_clone3(struct pt_regs *ctx)
         bpf_printk("\t*** user-defined stack is not identical to VMA it resides in ***");
     }
 
+    /* TEST: don't use clone3 edge-case map at all
     // observed false positive case from `apt instal` on Ubuntu 22.04
     // mmap_mprotect case exhibits clone_vm and clone_thread (among others)
     // but handling that mmap_mprotect case introduces worse false positives...
@@ -383,6 +386,7 @@ int kprobe_clone3(struct pt_regs *ctx)
             bpf_printk("\tERROR: unable to add stack info to clone3_edgecase map");
         }
     }
+    */
 
     return 0;
 }
@@ -477,27 +481,25 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
     wake_up_new_task_data.args.task = new_task;
     stack.pid = data->new_pid;
 
+    /*
     // handle clone3 edge-case. Our normal fork_frame inspection gets us
     // the wrong VMA in this case, so we get it directly from clone3 entry
     void *clone3_stack = bpf_map_lookup_elem(&clone3_edgecase, &(data->tid));
     if (clone3_stack != NULL) {
         bpf_printk("[wake_up_new_task] pid %d", stack.pid);
         bpf_printk("\tfrom clone3 sp: %lx, vma: [%lx, %lx)", data->sp, stack.start, stack.end);
-        /* TODO: testing sp == vma.start edge-case detection
         res = bpf_map_update_elem(&stack_map, &data->new_pid, clone3_stack, BPF_NOEXIST);
         if (res < 0) {
             bpf_printk("[wake_up_new_task] ERROR: failed to write clone3 info to stack_map");
         }
-        */
         res = bpf_map_delete_elem(&clone3_edgecase, &(data->tid));
         if (res < 0) {
             bpf_printk("[wake_up_new_task] ERROR: failed to remove clone3 info from clone3_edgecase");
         }
 
-        /* TODO: testing sp == vma.start edge-case detection
         return 0;
-        */
     }
+    */
 
     /* Get stack VMA using the new task's pt_regs->sp. In kernels >= 4.9 
      * the new task's pt_regs is saved to the regs field in a fork_frame
