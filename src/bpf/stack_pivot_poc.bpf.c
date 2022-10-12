@@ -18,12 +18,6 @@ struct stack_data {
     ulong end;
 };
 
-// TODO: use this to report detected stack pivot attempts/events to userland
-struct stack_pivot_event_t {
-    struct slim_data_t data;
-    // TODO: add only the necessary fields below, based on experience
-};
-
 // maps
 BPF_MAP_DEF(stack_pivot_event)
 
@@ -59,7 +53,6 @@ struct {
 // force exporting types to rust skeleton
 #define EXPORT_TYPE(t) \
     struct t __unused_##t = {0}
-//EXPORT_TYPE(stack_pivot_event_t);
 EXPORT_TYPE(stack_pivot_event_v2);
 
 /* our version of the sp checking routine
@@ -283,8 +276,6 @@ int kprobe_clone(struct pt_regs *ctx)
 {
     ulong clone_flags, newsp;
 
-    struct stack_pivot_event_t sp_event = { 0 };
-
     struct stack_pivot_event_v2 sp_event_v2 = { 0 };
 
     struct pt_regs *uctx;
@@ -341,7 +332,6 @@ SEC("kprobe/__x64_sys_clone3")
 int kprobe_clone3(struct pt_regs *ctx)
 {
     ulong clone_flags, newsp, stack_size;
-    struct stack_pivot_event_t sp_event = { 0 };
     struct stack_pivot_event_v2 sp_event_v2 = { 0 };
 
     struct clone_args *uargs;
@@ -562,26 +552,24 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
 SEC("kprobe/do_exit")
 int kprobe_do_exit(struct pt_regs *ctx)
 {
-    // TODO: decompose slim_data_t
-    struct do_exit_data do_exit_data = { 0 };
-    struct slim_data_t *data = &do_exit_data.data;
+    struct stack_pivot_event_v2 sp_event_v2;
     struct pt_regs *uctx;
     struct task_struct *t;
+    long exit_code;
 
-    t = init_probe_data(data);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
 
     if (t->flags & PF_KTHREAD)
         return 0;
 
     // do_exit args
     uctx = (struct pt_regs *)ctx->di;
-    BPF_READ(do_exit_data.args.code, uctx->di);
+    BPF_READ(exit_code, uctx->di);
 
     // Delete entry for exiting thread
-    bpf_map_delete_elem(&stack_map, &data->tid);
-    data->time = bpf_ktime_get_ns();
+    bpf_map_delete_elem(&stack_map, &sp_event_v2.tid);
 
-    bpf_printk("[do_exit] %d:%d", data->pid, data->tid);
+    bpf_printk("[do_exit] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, exit_code);
 
     return 0;
 }
@@ -623,8 +611,6 @@ int kprobe_execve(struct pt_regs *ctx)
     }
     sp_event_v2.kind = stack_pivot_res;
 
-    // just use raw slim_data_t type for execve (only conveying stack pivot check right now)
-    // TODO: convert to stack_pivot_event_v2
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
@@ -633,19 +619,19 @@ int kprobe_execve(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_execve")
 int kretprobe_execve(struct pt_regs *ctx)
 {
-    // TODO: decompose slim_data_t
-    struct slim_data_t data = { 0 };
+    struct stack_pivot_event_v2 sp_event_v2;
     struct task_struct *t;
+    int retval;
 
-    t = init_probe_data(&data);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
 
     if (t->flags & PF_KTHREAD)
         return 0;
 
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
-    BPF_READ(data.retval, ctx->ax);
+    BPF_READ(retval, ctx->ax);
 
-    bpf_printk("[execve return] %d:%d -> %d", data.pid, data.tid, data.retval);
+    bpf_printk("[execve return] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, retval);
 
     // invalidate this current task's tracked stack region; after the execve we'll
     // have an entirely different one, and will need to rediscover it. If we don't
@@ -653,8 +639,8 @@ int kretprobe_execve(struct pt_regs *ctx)
     // for this task.
     // However, only do so if execve succeeds. If it fails, this task's virtual memory
     // is not changed.
-    if (data.retval == 0) {
-        bpf_map_delete_elem(&stack_map, &data.tid);
+    if (retval == 0) {
+        bpf_map_delete_elem(&stack_map, &sp_event_v2.tid);
     }
 
     return 0;
