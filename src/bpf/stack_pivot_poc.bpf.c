@@ -344,19 +344,17 @@ int kprobe_clone(struct pt_regs *ctx)
     return 0;
 }
 
+// TODO: clean this up to just be stack pivot checking/debug output, like clone
 SEC("kprobe/__x64_sys_clone3")
 int kprobe_clone3(struct pt_regs *ctx)
 {
-    struct clone_user_args clone_args = { 0 };
+    ulong clone_flags, newsp, stack_size;
     struct stack_pivot_event_t sp_event = { 0 };
+    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
 
     struct clone_args *uargs;
     struct clone_args local_uargs = { 0 };
     size_t size;
-
-    ulong clone_flags;
-    ulong new_stack;
-    u64 stack_size;
 
     struct slim_data_t *data = &sp_event.data;
     struct pt_regs *uctx;
@@ -365,6 +363,7 @@ int kprobe_clone3(struct pt_regs *ctx)
     struct stack_data stack = { 0 };
 
     t = init_probe_data(data);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
 
     if (t->flags & PF_KTHREAD)
         return 0;
@@ -380,21 +379,22 @@ int kprobe_clone3(struct pt_regs *ctx)
     BPF_READ(size, uctx->si);
     bpf_probe_read(&local_uargs, sizeof(local_uargs), uargs);
 
-    clone_args.clone_flags = local_uargs.flags;
-    clone_args.newsp = local_uargs.stack;
+    clone_flags = local_uargs.flags;
+    newsp = local_uargs.stack;
     stack_size = local_uargs.stack_size;
 
-    find_vma_range(mm, clone_args.newsp, &stack.start, &stack.end);
+    find_vma_range(mm, newsp, &stack.start, &stack.end);
 
-    int has_clone_vm = (clone_args.clone_flags & CLONE_VM) ? 1 : 0;
-    int has_clone_vfork = (clone_args.clone_flags & CLONE_VFORK) ? 1 : 0;
-    int has_clone_thread = (clone_args.clone_flags & CLONE_THREAD) ? 1 : 0;
+    int has_clone_vm = (clone_flags & CLONE_VM) ? 1 : 0;
+    int has_clone_vfork = (clone_flags & CLONE_VFORK) ? 1 : 0;
+    int has_clone_thread = (clone_flags & CLONE_THREAD) ? 1 : 0;
 
-    bpf_printk("[clone3] %d:%d, clone_vm: %d", data->pid, data->tid, has_clone_vm);
+    //bpf_printk("[clone3] %d:%d, clone_vm: %d", data->pid, data->tid, has_clone_vm);
+    bpf_printk("[clone3] %d:%d, clone_vm: %d", sp_event_v2.pid, sp_event_v2.tid, has_clone_vm);
     bpf_printk("\tuargs: %lx, size: %d", uargs, size);
-    bpf_printk("\tflags: %lx, newsp suggested region: [%lx, %lx)", clone_args.clone_flags, clone_args.newsp, clone_args.newsp + stack_size);
+    bpf_printk("\tflags: %lx, newsp suggested region: [%lx, %lx)", clone_flags, newsp, newsp + stack_size);
     bpf_printk("\tnewsp vma: [%lx, %lx)", stack.start, stack.end);
-    if (clone_args.newsp != stack.start || (clone_args.newsp + stack_size != stack.end)) {
+    if (newsp != stack.start || (newsp + stack_size != stack.end)) {
         bpf_printk("\t*** user-defined stack is not identical to VMA it resides in ***");
     }
 
@@ -431,19 +431,22 @@ int kprobe_clone_ia32(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
+    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
     struct clone_data clone_data = { 0 };
     struct slim_data_t *data = &clone_data.data;
     struct task_struct *t;
+    int retval;
 
     t = init_probe_data(data);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
 
     if (t->flags & PF_KTHREAD)
         return 0;
 
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
-    BPF_READ(data->retval, ctx->ax);
+    BPF_READ(retval, ctx->ax);
 
-    bpf_printk("[clone return] %d:%d -> %d", data->pid, data->tid, data->retval);
+    bpf_printk("[clone return] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, retval);
 
     return 0;
 }
@@ -452,19 +455,22 @@ int kretprobe_clone(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_clone3")
 int kretprobe_clone3(struct pt_regs *ctx)
 {
+    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
     struct clone_data clone_data = { 0 };
     struct slim_data_t *data = &clone_data.data;
     struct task_struct *t;
+    int retval;
 
     t = init_probe_data(data);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
 
     if (t->flags & PF_KTHREAD)
         return 0;
 
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
-    BPF_READ(data->retval, ctx->ax);
+    BPF_READ(retval, ctx->ax);
 
-    bpf_printk("[clone3 return] %d:%d -> %d", data->pid, data->tid, data->retval);
+    bpf_printk("[clone3 return] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, retval);
 
     return 0;
 }
@@ -484,6 +490,7 @@ int kretprobe_clone3(struct pt_regs *ctx)
 SEC("kprobe/wake_up_new_task")
 int kprobe_wake_up_new_task(struct pt_regs *ctx)
 {
+    // TODO: decompose slim_data_t
     struct wake_up_new_task_data wake_up_new_task_data = { 0 };
     struct slim_data_t *data = &wake_up_new_task_data.data;
     struct task_struct *new_task;
@@ -570,6 +577,7 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
 SEC("kprobe/do_exit")
 int kprobe_do_exit(struct pt_regs *ctx)
 {
+    // TODO: decompose slim_data_t
     struct do_exit_data do_exit_data = { 0 };
     struct slim_data_t *data = &do_exit_data.data;
     struct pt_regs *uctx;
@@ -647,6 +655,7 @@ int kprobe_execve(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_execve")
 int kretprobe_execve(struct pt_regs *ctx)
 {
+    // TODO: decompose slim_data_t
     struct slim_data_t data = { 0 };
     struct task_struct *t;
 
@@ -684,9 +693,13 @@ int kprobe_mmap(struct pt_regs *ctx)
     struct task_struct *t;
     int stack_pivot_res;
 
+    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
+
     data.sp = user_sp;
+    sp_event_v2.sp = user_sp;
 
     // heuristic: only worry about executable pages (rdx)
     // (cuts down on events)
@@ -696,18 +709,23 @@ int kprobe_mmap(struct pt_regs *ctx)
     }
 
     t = init_probe_data(&data);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
 
-    bpf_printk("[mmap] %d:%d", data.pid, data.tid);
+    //bpf_printk("[mmap] %d:%d", data.pid, data.tid);
+    bpf_printk("[mmap] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
 
     stack_pivot_res = check_stack_pivot(&data, t);
+    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[mmap] not-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", data.sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
         }
     }
     data.err = stack_pivot_res;
+    sp_event_v2.kind = stack_pivot_res;
 
+    // TODO: convert to stack_pivot_event_v2 type
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
 
     return 0;
@@ -724,9 +742,11 @@ int kprobe_mprotect(struct pt_regs *ctx)
     struct task_struct *t;
     int stack_pivot_res;
 
+    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
-    data.sp = user_sp;
+    sp_event_v2.sp = user_sp;
 
     // heuristic: only worry about executable pages (rdx)
     // (cuts down on events)
@@ -736,18 +756,23 @@ int kprobe_mprotect(struct pt_regs *ctx)
     }
 
     t = init_probe_data(&data);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
 
-    bpf_printk("[mprotect] %d:%d", data.pid, data.tid);
+    //bpf_printk("[mprotect] %d:%d", data.pid, data.tid);
+    bpf_printk("[mprotect] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
 
     stack_pivot_res = check_stack_pivot(&data, t);
+    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[mprotect] not-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", data.sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
         }
     }
     data.err = stack_pivot_res;
+    sp_event_v2.kind = stack_pivot_res;
 
+    // TODO: convert to stack_pivot_event_v2
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
 
     return 0;
