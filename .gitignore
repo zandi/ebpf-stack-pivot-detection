@@ -3,3 +3,5 @@
 *.bin
 *.elf
 *.raw
+
+vmlinux.h
