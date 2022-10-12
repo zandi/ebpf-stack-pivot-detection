@@ -260,7 +260,6 @@ int kprobe_clone(struct pt_regs *ctx)
     }
     sp_event_v2.kind = stack_pivot_res;
 
-    // TODO: replace with new stack pivot event type, which requires bigger rust-side changes
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
@@ -315,21 +314,6 @@ int kprobe_clone3(struct pt_regs *ctx)
     if (newsp != stack.start || (newsp + stack_size != stack.end)) {
         bpf_printk("\t*** user-defined stack is not identical to VMA it resides in ***");
     }
-
-    /* TEST: don't use clone3 edge-case map at all
-    // observed false positive case from `apt instal` on Ubuntu 22.04
-    // mmap_mprotect case exhibits clone_vm and clone_thread (among others)
-    // but handling that mmap_mprotect case introduces worse false positives...
-    //if (has_clone_vm && (has_clone_vfork || has_clone_thread)) {
-    if (has_clone_vm && has_clone_vfork) {
-        bpf_printk("\t*** observed false positive case. Adding caller-specified stack to map ***");
-        u32 tid = data->tid; // tid is unique, safe to use to identify tasks (threads)
-        int res = bpf_map_update_elem(&clone3_edgecase, &tid, &stack, BPF_NOEXIST);
-        if (res < 0) {
-            bpf_printk("\tERROR: unable to add stack info to clone3_edgecase map");
-        }
-    }
-    */
 
     return 0;
 }
@@ -442,9 +426,6 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
             find_vma_range(mm, (sp - 8), &stack.start, &stack.end);
         }
 
-        // NOTE: apparently we track the new task's stack based on sp, regardless
-        // of anything else? This at least is incorrect in some clone3-based cases
-        // observed using CLONE_VM and CLONE_VFORK
         bpf_printk("\tfrom fork_frame sp: %lx, vma: [%lx, %lx)", sp, stack.start, stack.end);
 
         // Update stack map with new thread stack info
@@ -593,7 +574,6 @@ int kprobe_mmap(struct pt_regs *ctx)
     }
     sp_event_v2.kind = stack_pivot_res;
 
-    // TODO: convert to stack_pivot_event_v2 type
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
@@ -635,7 +615,6 @@ int kprobe_mprotect(struct pt_regs *ctx)
     }
     sp_event_v2.kind = stack_pivot_res;
 
-    // TODO: convert to stack_pivot_event_v2
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
