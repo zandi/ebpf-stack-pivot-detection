@@ -59,7 +59,7 @@ struct {
 // force exporting types to rust skeleton
 #define EXPORT_TYPE(t) \
     struct t __unused_##t = {0}
-EXPORT_TYPE(stack_pivot_event_t);
+//EXPORT_TYPE(stack_pivot_event_t);
 EXPORT_TYPE(stack_pivot_event_v2);
 
 /* our version of the sp checking routine
@@ -339,7 +339,7 @@ int kprobe_clone(struct pt_regs *ctx)
     sp_event_v2.kind = stack_pivot_res;
 
     // TODO: replace with new stack pivot event type, which requires bigger rust-side changes
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), data, sizeof(struct slim_data_t), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
 }
@@ -647,7 +647,7 @@ int kprobe_execve(struct pt_regs *ctx)
 
     // just use raw slim_data_t type for execve (only conveying stack pivot check right now)
     // TODO: convert to stack_pivot_event_v2
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
 }
@@ -726,7 +726,7 @@ int kprobe_mmap(struct pt_regs *ctx)
     sp_event_v2.kind = stack_pivot_res;
 
     // TODO: convert to stack_pivot_event_v2 type
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
 }
@@ -773,7 +773,7 @@ int kprobe_mprotect(struct pt_regs *ctx)
     sp_event_v2.kind = stack_pivot_res;
 
     // TODO: convert to stack_pivot_event_v2
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
 
     return 0;
 }

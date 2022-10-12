@@ -58,10 +58,10 @@ fn parse_message<T>(data: &[u8]) -> Option<*const T> {
 
 fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     let event = unsafe {
-        *parse_message::<stack_pivot_poc_bss_types::stack_pivot_event_t>(data).unwrap()
+        *parse_message::<stack_pivot_poc_bss_types::stack_pivot_event_v2>(data).unwrap()
     };
 
-    match event.data.err {
+    match event.kind {
         ERR_LOOKS_OK => OK_EVENTS.fetch_add(1, Ordering::SeqCst),
         ERR_NO_VMA => NO_VMA_EVENTS.fetch_add(1, Ordering::SeqCst),
         ERR_STACK_PIVOT => STACK_PIVOT_EVENTS.fetch_add(1, Ordering::SeqCst),
@@ -70,7 +70,7 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         _ => UNKNOWN_EVENTS.fetch_add(1, Ordering::SeqCst),
     };
 
-    let error_label = match event.data.err {
+    let error_label = match event.kind {
         ERR_LOOKS_OK => "Ok",
         ERR_NO_VMA => "No VMA backing stack pointer (???)",
         ERR_STACK_PIVOT => "Stack Pivot",
@@ -79,15 +79,17 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         _ => "Unknown Error Value",
     };
 
+    /*
     let source_label = match event.data.stack_src {
         STACK_SRC_SELF => "Self",
         STACK_SRC_UNK => "Unknown",
         STACK_SRC_ERR => "Error",
         _ => "Unknown Source Value",
     };
+    */
 
-    if event.data.err == ERR_STACK_PIVOT {
-        println!("[stack pivot event]: task: {}:{} event {}, sp: {:#x}, source {} vma: [{:#x}, {:#x})", event.data.pid, event.data.tid, error_label, event.data.sp, source_label, event.data.stack_start, event.data.stack_end);
+    if event.kind == ERR_STACK_PIVOT {
+        println!("[stack pivot event]: task: {}:{} event {}, sp: {:#x}, vma: [{:#x}, {:#x})", event.pid, event.tid, error_label, event.sp, event.stack_start, event.stack_end);
     }
 
     0
