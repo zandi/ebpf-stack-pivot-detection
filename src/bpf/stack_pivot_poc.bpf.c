@@ -60,6 +60,7 @@ struct {
 #define EXPORT_TYPE(t) \
     struct t __unused_##t = {0}
 EXPORT_TYPE(stack_pivot_event_t);
+EXPORT_TYPE(stack_pivot_event_v2);
 
 /* our version of the sp checking routine
  *
@@ -79,6 +80,13 @@ EXPORT_TYPE(stack_pivot_event_t);
  * from golang because of how goroutines are implemented/scheduled on different
  * threads. If these false positives are predictable in some way, we may be able
  * to make an exception for them.
+ *
+ * fields in data we need:
+ *  sp
+ * fields in data we set:
+ *  stack_pid, stack_start, stack_end, stack_src
+ *  start_stack_addr, task
+ * 
  */
 static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
 {
@@ -245,6 +253,17 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     }
 }
 
+// wrapper for refactoring: for now, just convert the stack_pivot_event_v2 type to a
+// slim_data_t type and use the existing function
+static int check_stack_pivot_v2(struct stack_pivot_event_v2 *event, struct task_struct *t)
+{
+    struct slim_data_t data = { 0 };
+
+    data.sp = event->sp;
+
+    return check_stack_pivot(&data, t);
+}
+
 // eBPF programs for keeping track of thread stack areas
 // NOTE: some of these are also syscalls where we'll need
 // to check for a stack pivot
@@ -262,10 +281,14 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
 SEC("kprobe/__x64_sys_clone")
 int kprobe_clone(struct pt_regs *ctx)
 {
-    struct clone_user_args clone_args = { 0 };
+    ulong clone_flags, newsp;
+
     struct stack_pivot_event_t sp_event = { 0 };
 
+    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+
     struct slim_data_t *data = &sp_event.data;
+
     struct pt_regs *uctx;
     struct task_struct *t;
     int *tid_tmp;
@@ -277,6 +300,8 @@ int kprobe_clone(struct pt_regs *ctx)
 
     t = init_probe_data(data);
 
+    t = init_stack_pivot_event_v2(&sp_event_v2);
+
     BPF_READ(mm, t->mm);
 
     if (t->flags & PF_KTHREAD)
@@ -284,36 +309,36 @@ int kprobe_clone(struct pt_regs *ctx)
 
     // sys_clone user args
     uctx = (struct pt_regs *)ctx->di;
-    BPF_READ(clone_args.clone_flags, uctx->di);
-    BPF_READ(clone_args.newsp, uctx->si);
-
-    BPF_READ(tid_tmp, uctx->dx);
-    bpf_probe_read(&clone_args.parent_tid, sizeof(clone_args.parent_tid), tid_tmp);
-    BPF_READ(tid_tmp, uctx->r10);
-    bpf_probe_read(&clone_args.child_tid, sizeof(clone_args.child_tid), tid_tmp);
+    BPF_READ(clone_flags, uctx->di);
+    BPF_READ(newsp, uctx->si);
 
     BPF_READ(data->sp, uctx->sp);
+    BPF_READ(sp_event_v2.sp, uctx->sp);
 
-    int has_clone_vm = (clone_args.clone_flags & CLONE_VM) ? 1 : 0;
-    int has_clone_thread = (clone_args.clone_flags & CLONE_THREAD) ? 1 : 0;
-    bpf_printk("[clone] %d:%d", data->pid, data->tid);
+    int has_clone_vm = (clone_flags & CLONE_VM) ? 1 : 0;
+    int has_clone_thread = (clone_flags & CLONE_THREAD) ? 1 : 0;
+    //bpf_printk("[clone] %d:%d", data->pid, data->tid);
+    bpf_printk("[clone] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
     bpf_printk("[clone]\tclone_vm: %d, clone_thread: %d", has_clone_vm, has_clone_thread);
-    bpf_printk("[clone]\tnewsp: %lx", clone_args.newsp);
+    bpf_printk("[clone]\tnewsp: %lx", newsp);
 
-    res = find_vma_range(mm, clone_args.newsp, &vma_start, &vma_end);
+    res = find_vma_range(mm, newsp, &vma_start, &vma_end);
     if (res == FIND_VMA_SUCCESS) {
         bpf_printk("[clone]\tnewsp vma: [%lx, %lx)", vma_start, vma_end);
     }
 
     stack_pivot_res = check_stack_pivot(data, t);
+    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[clone]\tnot-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", data->sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
         }
     }
     data->err = stack_pivot_res;
+    sp_event_v2.kind = stack_pivot_res;
 
+    // TODO: replace with new stack pivot event type, which requires bigger rust-side changes
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), data, sizeof(struct slim_data_t), 0);
 
     return 0;
@@ -587,24 +612,33 @@ int kprobe_execve(struct pt_regs *ctx)
     struct task_struct *t;
     int stack_pivot_res;
 
+    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
     data.sp = user_sp;
+    sp_event_v2.sp = user_sp;
 
     t = init_probe_data(&data);
 
-    bpf_printk("[execve] %d:%d", data.pid, data.tid);
+    t = init_stack_pivot_event_v2(&sp_event_v2);
+
+    //bpf_printk("[execve] %d:%d", data.pid, data.tid);
+    bpf_printk("[execve] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
 
     stack_pivot_res = check_stack_pivot(&data, t);
+    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[execve] not-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", data.sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
         }
     }
     data.err = stack_pivot_res;
+    sp_event_v2.kind = stack_pivot_res;
 
     // just use raw slim_data_t type for execve (only conveying stack pivot check right now)
+    // TODO: convert to stack_pivot_event_v2
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &data, sizeof(data), 0);
 
     return 0;

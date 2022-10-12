@@ -124,7 +124,7 @@ struct stack_pivot_event_v2 {
     ulong sp;
     ulong stack_start;
     ulong stack_end;
-    int type;
+    int kind; // "type" is a keyword in rust
 };
 
 // combine generic data with function-specific args
