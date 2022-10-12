@@ -60,19 +60,9 @@ EXPORT_TYPE(stack_pivot_event_v2);
  * we will also fail this lookup. So we need to determine if a thread is 'ancient' and
  * thus not properly tracked by us, or if it's 'recent' and is.
  *
- * TODO: explore possibility of golang goroutine edge case. We get false positives
- * from golang because of how goroutines are implemented/scheduled on different
- * threads. If these false positives are predictable in some way, we may be able
- * to make an exception for them.
- *
- * fields in data we need:
- *  sp
- * fields in data we set:
- *  stack_pid, stack_start, stack_end, stack_src
- *  start_stack_addr, task
- * 
+ * TODO: improve golang exception by researching golang runtime
  */
-static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
+static int check_stack_pivot_v2(struct stack_pivot_event_v2 *event, struct task_struct *t)
 {
     struct stack_data *stack;
     struct mm_struct *mm;
@@ -80,46 +70,23 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     int res;
     unsigned long start_stack;
     unsigned long found_stack_start, found_stack_end;
-    unsigned long sp_vma_start, sp_vma_end;
     unsigned long user_sp;
 
     BPF_READ(pid, t->pid);
     BPF_READ(tgid, t->tgid);
     BPF_READ(mm, t->mm);
     BPF_READ(start_stack, mm->start_stack);
-    user_sp = data->sp;
-
-    // side-affects in data struct taken from check_stack_vma
-    data->start_stack_addr = (ulong)(&mm->start_stack);
-    data->task = (ulong)t;
-
-    // redone-redone check.
-    // pid == tid => thread group leader, sp should be in mm->start_stack vma
-    //    - However, there are edge cases where we manually track the region in the stack map
-    // pid != tid => non-leader thread, stack should be tracked in map.
-    //    stack tracked in map => sp should be in tracked region
-    //    stack not tracked in map => ancient thread, fail open (can't conclude good/bad)
-    // special case: hardcoded exception regions for golang
-
-    // redone-redone-redone check.
-    // we've observed cases where our stack pointer in the thread group leader
-    // is either in the VMA found via mm->start_stack, or a tracked region (special edge
-    // cases). Loosen the check (at least for now) to allow for a 'valid' stack
-    // region to be 1) a tracked region for this task or 2) a golang exception region
-    // or 3) a region discovered by mm->start_stack
-    //
-    // This is less precise than I like, but we can run with it for now, until we
-    // get at the root of why some thread group leaders have a special stack
-    // region tracked when we should fall back to the mm->start_stack region, meaning
-    // we shouldn't be tracking any region for that thread group leader.
+    user_sp = event->sp;
 
     // TODO: verify correctness against golang runtime/extensive testing
-    if (   (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff)
-        || (0xc420000000 <= user_sp && user_sp <= 0xc420ffffff) ) {
-        data->stack_pid = stack->pid;
-        data->stack_start = found_stack_start;
-        data->stack_end = found_stack_end;
-        data->stack_src = STACK_SRC_SELF;
+    if (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff) {
+        event->stack_start = 0xc000000000;
+        event->stack_end = 0xc000ffffff;
+        return ERR_POSSIBLE_GOLANG_STACK;
+    }
+    else if (0xc420000000 <= user_sp && user_sp <= 0xc420ffffff) {
+        event->stack_start = 0xc420000000;
+        event->stack_end = 0xc420ffffff;
         return ERR_POSSIBLE_GOLANG_STACK;
     }
 
@@ -128,26 +95,26 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
     if (res == FIND_VMA_FAILURE) {
         // start_stack in task_struct not backed by a vma? Is this just a segfault?
         bpf_printk("[check_stack_pivot] %d:%d mm->start_stack has no VMA?", tgid, pid);
-        data->stack_pid = pid;
-        data->stack_start = 0;
-        data->stack_end = 0;
-        data->stack_src = STACK_SRC_ERR;
+        event->stack_start = 0;
+        event->stack_end = 0;
         return ERR_NO_VMA;
     }
+
     // for debugging
+    unsigned long sp_vma_start, sp_vma_end;
     res = find_vma_range(mm, user_sp, &sp_vma_start, &sp_vma_end);
     if (res == FIND_VMA_FAILURE) {
         bpf_printk("[check_stack_pivot] %d:%d sp has no VMA?", tgid, pid);
-        data->stack_pid = pid;
-        data->stack_start = 0;
-        data->stack_end = 0;
-        data->stack_src = STACK_SRC_ERR;
+        event->stack_start = 0;
+        event->stack_end = 0;
         return ERR_NO_VMA;
     }
+
     // debugging info
     bpf_printk("[check_stack_pivot] %d:%d", tgid, pid);
     bpf_printk("[check_stack_pivot] mm->start_stack vma [%lx, %lx)", found_stack_start, found_stack_end);
     bpf_printk("[check_stack_pivot] \tvma size: %lx", found_stack_end - found_stack_start);
+    // for debugging
     bpf_printk("[check_stack_pivot] user_sp vma [%lx, %lx)", sp_vma_start, sp_vma_end);
     bpf_printk("[check_stack_pivot] \tvma size: %lx", sp_vma_end - sp_vma_start);
 
@@ -168,31 +135,29 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
             // Also, loosen the check here to handle rare cases where we track
             // a region (mistakenly) but sp resides in mm->start_stack's vma.
             bpf_printk("[check_stack_pivot] tracked thread stack [%lx, %lx)", stack->start, stack->end);
-            if (   (stack->start <= user_sp && user_sp < stack->end)
-                || (found_stack_start <= user_sp && user_sp < found_stack_end)) {
+            if (stack->start <= user_sp && user_sp < stack->end) {
                 // OK case
-                data->stack_pid = pid;
-                data->stack_start = found_stack_start;
-                data->stack_end = found_stack_end;
-                data->stack_src = STACK_SRC_SELF;
+                event->stack_start = stack->start;
+                event->stack_end = stack->end;
+                return ERR_LOOKS_OK;
+            }
+            else if (found_stack_start <= user_sp && user_sp < found_stack_end) {
+                event->stack_start = found_stack_start;
+                event->stack_end = found_stack_end;
                 return ERR_LOOKS_OK;
             }
         }
         else if (found_stack_start <= user_sp && user_sp < found_stack_end) {
             // stack pointer in stack VMA, everything looks good here
-            data->stack_pid = pid;
-            data->stack_start = found_stack_start;
-            data->stack_end = found_stack_end;
-            data->stack_src = STACK_SRC_SELF;
+            event->stack_start = found_stack_start;
+            event->stack_end = found_stack_end;
             return ERR_LOOKS_OK;
         }
         else {
             // bad
             bpf_printk("[check_stack_pivot]\t*** stack pivot detected! ***");
-            data->stack_pid = pid;
-            data->stack_start = found_stack_start;
-            data->stack_end = found_stack_end;
-            data->stack_src = STACK_SRC_SELF;
+            event->stack_start = found_stack_start;
+            event->stack_end = found_stack_end;
             return ERR_STACK_PIVOT;
         }
     }
@@ -208,44 +173,27 @@ static int check_stack_pivot(struct slim_data_t *data, struct task_struct *t)
             bpf_printk("[check_stack_pivot] tracked thread stack [%lx, %lx)", found_stack_start, found_stack_end);
             if (found_stack_start <= user_sp && user_sp < found_stack_end) {
                 // good
-                data->stack_pid = stack->pid;
-                data->stack_start = found_stack_start;
-                data->stack_end = found_stack_end;
-                data->stack_src = STACK_SRC_SELF;
+                event->stack_start = found_stack_start;
+                event->stack_end = found_stack_end;
                 return ERR_LOOKS_OK;
             }
             // golang exception case already handled above
             else {
                 // bad
                 bpf_printk("[check_stack_pivot]\t*** stack pivot detected! ***");
-                data->stack_pid = stack->pid;
-                data->stack_start = found_stack_start;
-                data->stack_end = found_stack_end;
-                data->stack_src = STACK_SRC_SELF;
+                event->stack_start = found_stack_start;
+                event->stack_end = found_stack_end;
                 return ERR_STACK_PIVOT;
             }
         }
         else {
             // not tracked, ancient thread
             bpf_printk("[check_stack_pivot] %d:%d ancient non-main thread, untracked. sp:%lx", tgid, pid, user_sp);
-            data->stack_pid = pid;
-            data->stack_start = 0;
-            data->stack_end = 0;
-            data->stack_src = STACK_SRC_UNK;
+            event->stack_start = 0;
+            event->stack_end = 0;
             return ERR_ANCIENT_THREAD;
         }
     }
-}
-
-// wrapper for refactoring: for now, just convert the stack_pivot_event_v2 type to a
-// slim_data_t type and use the existing function
-static int check_stack_pivot_v2(struct stack_pivot_event_v2 *event, struct task_struct *t)
-{
-    struct slim_data_t data = { 0 };
-
-    data.sp = event->sp;
-
-    return check_stack_pivot(&data, t);
 }
 
 // eBPF programs for keeping track of thread stack areas
@@ -402,7 +350,6 @@ SEC("kretprobe/__x64_sys_clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
     struct stack_pivot_event_v2 sp_event_v2 = { 0 };
-    struct clone_data clone_data = { 0 };
     struct task_struct *t;
     int retval;
 
@@ -424,7 +371,6 @@ SEC("kretprobe/__x64_sys_clone3")
 int kretprobe_clone3(struct pt_regs *ctx)
 {
     struct stack_pivot_event_v2 sp_event_v2 = { 0 };
-    struct clone_data clone_data = { 0 };
     struct task_struct *t;
     int retval;
 

@@ -46,72 +46,6 @@
 
 typedef unsigned long ulong;
 
-// args for various functions we monitor
-struct clone_user_args {
-    ulong clone_flags;
-    ulong newsp;
-    int parent_tid;
-    int child_tid;
-    /*
-    int *parent_tidptr;
-    int *child_tidptr;
-    //*/
-};
-
-//*
-struct wake_up_new_task_args {
-    struct task_struct *task;
-};
-//*/
-
-struct do_exit_args {
-    long code;
-};
-
-// generic data (included in all events)
-struct data_t {
-    int err;
-    int pid;
-    int ppid;
-    int tid;
-    int retval;
-    int new_pid;
-    int stack_src;
-    int stack_pid; // pid of parent thread created with newsp
-    ulong time;
-    ulong sp;
-    //ulong stack;
-    ulong start_stack;
-    ulong start_stack_addr;
-    ulong task;
-    ulong stack_start;
-    ulong stack_end;
-    char buf[BUF_SIZE];
-};
-
-// my slimmed-down version of data_t type to be more efficient
-// still a catch-all struct, so refactor that later
-struct slim_data_t {
-    ulong time;
-    int pid;
-    int tid;
-    int ppid;
-    ulong sp;
-    ulong start_stack;
-    ulong start_stack_addr;
-    ulong task;
-
-    int stack_src;
-    int stack_pid; // pid of parent thread created with newsp
-    ulong stack_start;
-    ulong stack_end;
-
-    int new_pid;
-    int retval;
-
-    int err;
-};
-
 // refactored stack event type. Only for suspicious/bad events,
 // "OK" events only made/sent for debugging
 // TODO:
@@ -127,39 +61,10 @@ struct stack_pivot_event_v2 {
     int kind; // "type" is a keyword in rust
 };
 
-// combine generic data with function-specific args
-struct clone_data {
-    struct slim_data_t data;
-    struct clone_user_args args;
-};
-
-//*
-struct wake_up_new_task_data {
-    struct slim_data_t data;
-    struct wake_up_new_task_args args;
-};
-//*/
-
-struct do_exit_data {
-    struct slim_data_t data;
-    struct do_exit_args args;
-};
-
-union generic_event_data_union {
-    struct clone_data clone_data;
-    //struct wake_up_new_task_data wake_up_new_task_data;
-    struct do_exit_data do_exit_data;
-};
-
 #define CLONE_DATA_TYPE 1
 #define WAKE_UP_NEW_TASK_DATA_TYPE 2
 #define DO_EXIT_DATA_TYPE 3
 #define UNKNOWN_DATA_TYPE -1
-
-struct event_data_t {
-    int inner_type;
-    union generic_event_data_union data;
-};
 
 // combines separate tgid, pid into combined tgid_pid like from bpf_get_current_pid_tgid helper
 #define MAKE_COMBINED_TGID_PID(dest, tgid, pid) \
@@ -228,27 +133,6 @@ static int find_vma_range(struct mm_struct *mm, ulong addr, ulong *start,
         }
     }
     return FIND_VMA_FAILURE;
-}
-
-/* Initializes probe data with a time stamp, PID, PPID, and LWP (TID).
- *
- * Returns a pointer to the current task. */
-struct task_struct *init_probe_data(struct slim_data_t *data)
-{
-    struct task_struct *t;
-    struct task_struct *real_parent;
-    ulong pid_tgid;
-
-    data->time = bpf_ktime_get_ns();
-    pid_tgid = bpf_get_current_pid_tgid();
-    data->pid = pid_tgid >> 32;
-    data->tid = pid_tgid & 0xffffffff; // unnecessary?
-    t = bpf_get_current_task_btf();
-    BPF_READ(data->tid, t->pid);
-    BPF_READ(real_parent, t->real_parent);
-    BPF_READ(data->ppid, real_parent->pid);
-
-    return t;
 }
 
 /* Initialize stack pivot event type with common info
