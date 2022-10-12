@@ -112,6 +112,21 @@ struct slim_data_t {
     int err;
 };
 
+// refactored stack event type. Only for suspicious/bad events,
+// "OK" events only made/sent for debugging
+// TODO:
+//    - send "OK" events only when debugging build
+//    - consider adding: sp vma info, ppid, 'source' of assumed stack
+struct stack_pivot_event_v2 {
+    ulong time;
+    int pid;
+    int tid;
+    ulong sp;
+    ulong stack_start;
+    ulong stack_end;
+    int type;
+};
+
 // combine generic data with function-specific args
 struct clone_data {
     struct slim_data_t data;
@@ -232,6 +247,26 @@ struct task_struct *init_probe_data(struct slim_data_t *data)
     BPF_READ(data->tid, t->pid);
     BPF_READ(real_parent, t->real_parent);
     BPF_READ(data->ppid, real_parent->pid);
+
+    return t;
+}
+
+/* Initialize stack pivot event type with common info
+ *
+ * returns task struct of current task (helpful for other common work)
+*/
+struct task_struct *init_stack_pivot_event_v2(struct stack_pivot_event_v2 *event)
+{
+    struct task_struct *t;
+    ulong pid_tgid;
+
+    event->time = bpf_ktime_get_ns();
+    pid_tgid = bpf_get_current_pid_tgid();
+    event->pid = pid_tgid >> 32;
+    event->tid = pid_tgid & 0xffffffff;
+    t = bpf_get_current_task_btf();
+
+    BPF_READ(event->tid, t->pid);
 
     return t;
 }
