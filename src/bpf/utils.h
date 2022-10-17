@@ -51,7 +51,7 @@ typedef unsigned long ulong;
 // TODO:
 //    - send "OK" events only when debugging build
 //    - consider adding: sp vma info, ppid, 'source' of assumed stack
-struct stack_pivot_event_v2 {
+struct stack_pivot_event {
     ulong time;
     int pid;
     int tid;
@@ -139,7 +139,7 @@ static int find_vma_range(struct mm_struct *mm, ulong addr, ulong *start,
  *
  * returns task struct of current task (helpful for other common work)
 */
-struct task_struct *init_stack_pivot_event_v2(struct stack_pivot_event_v2 *event)
+struct task_struct *init_stack_pivot_event(struct stack_pivot_event *event)
 {
     struct task_struct *t;
     ulong pid_tgid;

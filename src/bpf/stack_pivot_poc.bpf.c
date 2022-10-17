@@ -44,7 +44,7 @@ struct {
 // force exporting types to rust skeleton
 #define EXPORT_TYPE(t) \
     struct t __unused_##t = {0}
-EXPORT_TYPE(stack_pivot_event_v2);
+EXPORT_TYPE(stack_pivot_event);
 
 /* our version of the sp checking routine
  *
@@ -62,7 +62,7 @@ EXPORT_TYPE(stack_pivot_event_v2);
  *
  * TODO: improve golang exception by researching golang runtime
  */
-static int check_stack_pivot_v2(struct stack_pivot_event_v2 *event, struct task_struct *t)
+static int check_stack_pivot(struct stack_pivot_event *event, struct task_struct *t)
 {
     struct stack_data *stack;
     struct mm_struct *mm;
@@ -215,7 +215,7 @@ int kprobe_clone(struct pt_regs *ctx)
 {
     ulong clone_flags, newsp;
 
-    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+    struct stack_pivot_event sp_event = { 0 };
 
     struct pt_regs *uctx;
     struct task_struct *t;
@@ -226,7 +226,7 @@ int kprobe_clone(struct pt_regs *ctx)
     ulong vma_start, vma_end;
     int res;
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
     BPF_READ(mm, t->mm);
 
@@ -238,11 +238,11 @@ int kprobe_clone(struct pt_regs *ctx)
     BPF_READ(clone_flags, uctx->di);
     BPF_READ(newsp, uctx->si);
 
-    BPF_READ(sp_event_v2.sp, uctx->sp);
+    BPF_READ(sp_event.sp, uctx->sp);
 
     int has_clone_vm = (clone_flags & CLONE_VM) ? 1 : 0;
     int has_clone_thread = (clone_flags & CLONE_THREAD) ? 1 : 0;
-    bpf_printk("[clone] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
+    bpf_printk("[clone] %d:%d", sp_event.pid, sp_event.tid);
     bpf_printk("[clone]\tclone_vm: %d, clone_thread: %d", has_clone_vm, has_clone_thread);
     bpf_printk("[clone]\tnewsp: %lx", newsp);
 
@@ -251,16 +251,16 @@ int kprobe_clone(struct pt_regs *ctx)
         bpf_printk("[clone]\tnewsp vma: [%lx, %lx)", vma_start, vma_end);
     }
 
-    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[clone]\tnot-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
         }
     }
-    sp_event_v2.kind = stack_pivot_res;
+    sp_event.kind = stack_pivot_res;
 
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 
     return 0;
 }
@@ -270,7 +270,7 @@ SEC("kprobe/__x64_sys_clone3")
 int kprobe_clone3(struct pt_regs *ctx)
 {
     ulong clone_flags, newsp, stack_size;
-    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+    struct stack_pivot_event sp_event = { 0 };
 
     struct clone_args *uargs;
     struct clone_args local_uargs = { 0 };
@@ -281,7 +281,7 @@ int kprobe_clone3(struct pt_regs *ctx)
     struct mm_struct *mm;
     struct stack_data stack = { 0 };
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
     if (t->flags & PF_KTHREAD)
         return 0;
@@ -307,7 +307,7 @@ int kprobe_clone3(struct pt_regs *ctx)
     int has_clone_vfork = (clone_flags & CLONE_VFORK) ? 1 : 0;
     int has_clone_thread = (clone_flags & CLONE_THREAD) ? 1 : 0;
 
-    bpf_printk("[clone3] %d:%d, clone_vm: %d", sp_event_v2.pid, sp_event_v2.tid, has_clone_vm);
+    bpf_printk("[clone3] %d:%d, clone_vm: %d", sp_event.pid, sp_event.tid, has_clone_vm);
     bpf_printk("\tuargs: %lx, size: %d", uargs, size);
     bpf_printk("\tflags: %lx, newsp suggested region: [%lx, %lx)", clone_flags, newsp, newsp + stack_size);
     bpf_printk("\tnewsp vma: [%lx, %lx)", stack.start, stack.end);
@@ -333,11 +333,11 @@ int kprobe_clone_ia32(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_clone")
 int kretprobe_clone(struct pt_regs *ctx)
 {
-    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+    struct stack_pivot_event sp_event = { 0 };
     struct task_struct *t;
     int retval;
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
     if (t->flags & PF_KTHREAD)
         return 0;
@@ -345,7 +345,7 @@ int kretprobe_clone(struct pt_regs *ctx)
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
     BPF_READ(retval, ctx->ax);
 
-    bpf_printk("[clone return] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, retval);
+    bpf_printk("[clone return] %d:%d -> %d", sp_event.pid, sp_event.tid, retval);
 
     return 0;
 }
@@ -354,11 +354,11 @@ int kretprobe_clone(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_clone3")
 int kretprobe_clone3(struct pt_regs *ctx)
 {
-    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+    struct stack_pivot_event sp_event = { 0 };
     struct task_struct *t;
     int retval;
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
     if (t->flags & PF_KTHREAD)
         return 0;
@@ -366,7 +366,7 @@ int kretprobe_clone3(struct pt_regs *ctx)
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
     BPF_READ(retval, ctx->ax);
 
-    bpf_printk("[clone3 return] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, retval);
+    bpf_printk("[clone3 return] %d:%d -> %d", sp_event.pid, sp_event.tid, retval);
 
     return 0;
 }
@@ -443,12 +443,12 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
 SEC("kprobe/do_exit")
 int kprobe_do_exit(struct pt_regs *ctx)
 {
-    struct stack_pivot_event_v2 sp_event_v2;
+    struct stack_pivot_event sp_event;
     struct pt_regs *uctx;
     struct task_struct *t;
     long exit_code;
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
     if (t->flags & PF_KTHREAD)
         return 0;
@@ -458,9 +458,9 @@ int kprobe_do_exit(struct pt_regs *ctx)
     BPF_READ(exit_code, uctx->di);
 
     // Delete entry for exiting thread
-    bpf_map_delete_elem(&stack_map, &sp_event_v2.tid);
+    bpf_map_delete_elem(&stack_map, &sp_event.tid);
 
-    bpf_printk("[do_exit] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, exit_code);
+    bpf_printk("[do_exit] %d:%d -> %d", sp_event.pid, sp_event.tid, exit_code);
 
     return 0;
 }
@@ -483,26 +483,26 @@ int kprobe_execve(struct pt_regs *ctx)
     struct task_struct *t;
     int stack_pivot_res;
 
-    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+    struct stack_pivot_event sp_event = { 0 };
 
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
-    sp_event_v2.sp = user_sp;
+    sp_event.sp = user_sp;
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
-    bpf_printk("[execve] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
+    bpf_printk("[execve] %d:%d", sp_event.pid, sp_event.tid);
 
-    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[execve] not-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
         }
     }
-    sp_event_v2.kind = stack_pivot_res;
+    sp_event.kind = stack_pivot_res;
 
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 
     return 0;
 }
@@ -510,11 +510,11 @@ int kprobe_execve(struct pt_regs *ctx)
 SEC("kretprobe/__x64_sys_execve")
 int kretprobe_execve(struct pt_regs *ctx)
 {
-    struct stack_pivot_event_v2 sp_event_v2;
+    struct stack_pivot_event sp_event;
     struct task_struct *t;
     int retval;
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
     if (t->flags & PF_KTHREAD)
         return 0;
@@ -522,7 +522,7 @@ int kretprobe_execve(struct pt_regs *ctx)
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
     BPF_READ(retval, ctx->ax);
 
-    bpf_printk("[execve return] %d:%d -> %d", sp_event_v2.pid, sp_event_v2.tid, retval);
+    bpf_printk("[execve return] %d:%d -> %d", sp_event.pid, sp_event.tid, retval);
 
     // invalidate this current task's tracked stack region; after the execve we'll
     // have an entirely different one, and will need to rediscover it. If we don't
@@ -531,7 +531,7 @@ int kretprobe_execve(struct pt_regs *ctx)
     // However, only do so if execve succeeds. If it fails, this task's virtual memory
     // is not changed.
     if (retval == 0) {
-        bpf_map_delete_elem(&stack_map, &sp_event_v2.tid);
+        bpf_map_delete_elem(&stack_map, &sp_event.tid);
     }
 
     return 0;
@@ -547,12 +547,12 @@ int kprobe_mmap(struct pt_regs *ctx)
     struct task_struct *t;
     int stack_pivot_res;
 
-    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+    struct stack_pivot_event sp_event = { 0 };
 
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
 
-    sp_event_v2.sp = user_sp;
+    sp_event.sp = user_sp;
 
     // heuristic: only worry about executable pages (rdx)
     // (cuts down on events)
@@ -561,20 +561,20 @@ int kprobe_mmap(struct pt_regs *ctx)
         return 0;
     }
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
-    bpf_printk("[mmap] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
+    bpf_printk("[mmap] %d:%d", sp_event.pid, sp_event.tid);
 
-    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[mmap] not-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
         }
     }
-    sp_event_v2.kind = stack_pivot_res;
+    sp_event.kind = stack_pivot_res;
 
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 
     return 0;
 }
@@ -589,11 +589,11 @@ int kprobe_mprotect(struct pt_regs *ctx)
     struct task_struct *t;
     int stack_pivot_res;
 
-    struct stack_pivot_event_v2 sp_event_v2 = { 0 };
+    struct stack_pivot_event sp_event = { 0 };
 
     BPF_READ(uctx, ctx->di);
     BPF_READ(user_sp, uctx->sp);
-    sp_event_v2.sp = user_sp;
+    sp_event.sp = user_sp;
 
     // heuristic: only worry about executable pages (rdx)
     // (cuts down on events)
@@ -602,20 +602,20 @@ int kprobe_mprotect(struct pt_regs *ctx)
         return 0;
     }
 
-    t = init_stack_pivot_event_v2(&sp_event_v2);
+    t = init_stack_pivot_event(&sp_event);
 
-    bpf_printk("[mprotect] %d:%d", sp_event_v2.pid, sp_event_v2.tid);
+    bpf_printk("[mprotect] %d:%d", sp_event.pid, sp_event.tid);
 
-    stack_pivot_res = check_stack_pivot_v2(&sp_event_v2, t);
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[mprotect] not-ok stack pivot check: %x", stack_pivot_res);
         if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event_v2.sp);
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
         }
     }
-    sp_event_v2.kind = stack_pivot_res;
+    sp_event.kind = stack_pivot_res;
 
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event_v2, sizeof(sp_event_v2), 0);
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 
     return 0;
 }

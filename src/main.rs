@@ -58,7 +58,7 @@ fn parse_message<T>(data: &[u8]) -> Option<*const T> {
 
 fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     let event = unsafe {
-        *parse_message::<stack_pivot_poc_bss_types::stack_pivot_event_v2>(data).unwrap()
+        *parse_message::<stack_pivot_poc_bss_types::stack_pivot_event>(data).unwrap()
     };
 
     match event.kind {
