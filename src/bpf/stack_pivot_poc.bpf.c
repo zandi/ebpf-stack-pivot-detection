@@ -213,32 +213,31 @@ static int check_stack_pivot(struct stack_pivot_event *event, struct task_struct
 SEC("kprobe/__x64_sys_clone")
 int kprobe_clone(struct pt_regs *ctx)
 {
-    ulong clone_flags, newsp;
-
     struct stack_pivot_event sp_event = { 0 };
-
-    struct pt_regs *uctx;
     struct task_struct *t;
-    int *tid_tmp;
+    struct pt_regs *uctx;
     int stack_pivot_res;
 
-    struct mm_struct *mm;
-    ulong vma_start, vma_end;
-    int res;
-
     t = init_stack_pivot_event(&sp_event);
-
-    BPF_READ(mm, t->mm);
 
     if (t->flags & PF_KTHREAD)
         return 0;
 
-    // sys_clone user args
     uctx = (struct pt_regs *)ctx->di;
+    BPF_READ(sp_event.sp, uctx->sp);
+
+
+    /* DEBUGGING BEGIN */
+    struct mm_struct *mm;
+    int res;
+    ulong vma_start, vma_end;
+    ulong clone_flags, newsp;
+
+    BPF_READ(mm, t->mm);
+
+    // sys_clone user args
     BPF_READ(clone_flags, uctx->di);
     BPF_READ(newsp, uctx->si);
-
-    BPF_READ(sp_event.sp, uctx->sp);
 
     int has_clone_vm = (clone_flags & CLONE_VM) ? 1 : 0;
     int has_clone_thread = (clone_flags & CLONE_THREAD) ? 1 : 0;
@@ -250,7 +249,10 @@ int kprobe_clone(struct pt_regs *ctx)
     if (res == FIND_VMA_SUCCESS) {
         bpf_printk("[clone]\tnewsp vma: [%lx, %lx)", vma_start, vma_end);
     }
+    /* DEBUGGING END */
 
+
+    // stack pivot check
     stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
         bpf_printk("[clone]\tnot-ok stack pivot check: %x", stack_pivot_res);
@@ -269,22 +271,25 @@ int kprobe_clone(struct pt_regs *ctx)
 SEC("kprobe/__x64_sys_clone3")
 int kprobe_clone3(struct pt_regs *ctx)
 {
-    ulong clone_flags, newsp, stack_size;
     struct stack_pivot_event sp_event = { 0 };
-
-    struct clone_args *uargs;
-    struct clone_args local_uargs = { 0 };
-    size_t size;
-
-    struct pt_regs *uctx;
     struct task_struct *t;
-    struct mm_struct *mm;
-    struct stack_data stack = { 0 };
+    struct pt_regs *uctx;
+    int stack_pivot_res;
 
     t = init_stack_pivot_event(&sp_event);
 
     if (t->flags & PF_KTHREAD)
         return 0;
+
+    BPF_READ(uctx, ctx->di);
+
+    /* DEBUGGING BEGIN */
+    struct clone_args *uargs;
+    struct clone_args local_uargs = { 0 };
+    struct mm_struct *mm;
+    struct stack_data stack = { 0 };
+    size_t size;
+    ulong clone_flags, newsp, stack_size;
 
     BPF_READ(mm, t->mm);
 
@@ -292,7 +297,6 @@ int kprobe_clone3(struct pt_regs *ctx)
     // CLONE_VM flag implies we must have stack provided in uargs
 
     // load args
-    BPF_READ(uctx, ctx->di);
     BPF_READ(uargs, uctx->di);
     BPF_READ(size, uctx->si);
     bpf_probe_read(&local_uargs, sizeof(local_uargs), uargs);
@@ -314,6 +318,21 @@ int kprobe_clone3(struct pt_regs *ctx)
     if (newsp != stack.start || (newsp + stack_size != stack.end)) {
         bpf_printk("\t*** user-defined stack is not identical to VMA it resides in ***");
     }
+    /* DEBUGGING END */
+
+
+    // stack pivot check
+    BPF_READ(sp_event.sp, uctx->sp);
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[clone3]\tnot-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
+        }
+    }
+    sp_event.kind = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 
     return 0;
 }
@@ -329,6 +348,7 @@ int kprobe_clone_ia32(struct pt_regs *ctx)
     return 0;
 }
 
+/* DEBUGGING BEGIN */
 // TODO: basically just for debugging, could disable/remove
 SEC("kretprobe/__x64_sys_clone")
 int kretprobe_clone(struct pt_regs *ctx)
@@ -370,6 +390,7 @@ int kretprobe_clone3(struct pt_regs *ctx)
 
     return 0;
 }
+/* DEBUGGING END */
 
 /* Function prototype:
  *
@@ -386,20 +407,21 @@ int kretprobe_clone3(struct pt_regs *ctx)
 SEC("kprobe/wake_up_new_task")
 int kprobe_wake_up_new_task(struct pt_regs *ctx)
 {
-    int new_pid;
-    ulong sp;
-
     struct task_struct *new_task;
     struct mm_struct *mm;
     struct fork_frame *fork_frame;
     struct stack_data stack = { 0 };
     uint flags;
+    int new_pid;
+    ulong sp;
 
     // Get new task thread ID
     new_task = (struct task_struct *)ctx->di;
     BPF_READ(flags, new_task->flags);
+
     if (flags & PF_KTHREAD)
         return 0;
+
     BPF_READ(new_pid, new_task->pid);
     BPF_READ(mm, new_task->mm);
 
@@ -410,7 +432,9 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
      * struct. This fork_frame is saved to the new task's thread.sp field. In 
      * kernels < 4.9 pt_regs is saved directly to thread.sp. */
 
+    /* DEBUGGING BEGIN */
     bpf_printk("[wake_up_new_task] pid %d", stack.pid);
+    /* DEBUGGING END */
 
     BPF_READ(fork_frame, new_task->thread.sp);
     BPF_READ(sp, fork_frame->regs.sp);
@@ -418,15 +442,19 @@ int kprobe_wake_up_new_task(struct pt_regs *ctx)
     find_vma_range(mm, sp, &stack.start, &stack.end);
     if (stack.start && stack.end) {
         if (sp == stack.start) {
+            /* DEBUGGING BEGIN */
             bpf_printk("\t*** sp initialized to beginning of VMA! in practice it will reside in the *previous* VMA to the one we've found. Adjusting... ***");
+            /* DEBUGGING END */
+
             // current gross hack: decrement observed fork_frame sp by 8, find _that_ vma,
             // and use that for the tracked stack. Would be nicer to use vma->vm_prev,
             // but we need to write a helper to get us the whole vma object to do that.
-            ulong prev_vma_start, prev_vma_end;
             find_vma_range(mm, (sp - 8), &stack.start, &stack.end);
         }
 
+        /* DEBUGGING BEGIN */
         bpf_printk("\tfrom fork_frame sp: %lx, vma: [%lx, %lx)", sp, stack.start, stack.end);
+        /* DEBUGGING END */
 
         // Update stack map with new thread stack info
         bpf_map_update_elem(&stack_map, &new_pid, &stack, BPF_NOEXIST);
@@ -453,14 +481,16 @@ int kprobe_do_exit(struct pt_regs *ctx)
     if (t->flags & PF_KTHREAD)
         return 0;
 
+    // Delete entry for exiting thread
+    bpf_map_delete_elem(&stack_map, &sp_event.tid);
+
+    /* DEBUGGING BEGIN */
     // do_exit args
     uctx = (struct pt_regs *)ctx->di;
     BPF_READ(exit_code, uctx->di);
 
-    // Delete entry for exiting thread
-    bpf_map_delete_elem(&stack_map, &sp_event.tid);
-
     bpf_printk("[do_exit] %d:%d -> %d", sp_event.pid, sp_event.tid, exit_code);
+    /* DEBUGGING END */
 
     return 0;
 }
@@ -479,19 +509,18 @@ SEC("kprobe/__x64_sys_execve")
 int kprobe_execve(struct pt_regs *ctx)
 {
     struct pt_regs *uctx;
-    unsigned long user_sp;
     struct task_struct *t;
-    int stack_pivot_res;
-
     struct stack_pivot_event sp_event = { 0 };
-
-    BPF_READ(uctx, ctx->di);
-    BPF_READ(user_sp, uctx->sp);
-    sp_event.sp = user_sp;
+    int stack_pivot_res;
 
     t = init_stack_pivot_event(&sp_event);
 
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(sp_event.sp, uctx->sp);
+
+    /* DEBUGGING BEGIN */
     bpf_printk("[execve] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
 
     stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
@@ -522,7 +551,9 @@ int kretprobe_execve(struct pt_regs *ctx)
     // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
     BPF_READ(retval, ctx->ax);
 
+    /* DEBUGGING BEGIN */
     bpf_printk("[execve return] %d:%d -> %d", sp_event.pid, sp_event.tid, retval);
+    /* DEBUGGING END */
 
     // invalidate this current task's tracked stack region; after the execve we'll
     // have an entirely different one, and will need to rediscover it. If we don't
@@ -541,18 +572,14 @@ SEC("kprobe/__x64_sys_mmap")
 int kprobe_mmap(struct pt_regs *ctx)
 {
     struct pt_regs *uctx;
-    unsigned long user_sp;
-    unsigned long prot;
-
+    struct stack_pivot_event sp_event = { 0 };
     struct task_struct *t;
     int stack_pivot_res;
+    unsigned long prot;
 
-    struct stack_pivot_event sp_event = { 0 };
 
     BPF_READ(uctx, ctx->di);
-    BPF_READ(user_sp, uctx->sp);
-
-    sp_event.sp = user_sp;
+    BPF_READ(sp_event.sp, uctx->sp);
 
     // heuristic: only worry about executable pages (rdx)
     // (cuts down on events)
@@ -563,7 +590,9 @@ int kprobe_mmap(struct pt_regs *ctx)
 
     t = init_stack_pivot_event(&sp_event);
 
+    /* DEBUGGING BEGIN */
     bpf_printk("[mmap] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
 
     stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
@@ -583,17 +612,14 @@ SEC("kprobe/__x64_sys_mprotect")
 int kprobe_mprotect(struct pt_regs *ctx)
 {
     struct pt_regs *uctx;
-    unsigned long user_sp;
-    unsigned long prot;
-
+    struct stack_pivot_event sp_event = { 0 };
     struct task_struct *t;
     int stack_pivot_res;
+    unsigned long prot;
 
-    struct stack_pivot_event sp_event = { 0 };
 
     BPF_READ(uctx, ctx->di);
-    BPF_READ(user_sp, uctx->sp);
-    sp_event.sp = user_sp;
+    BPF_READ(sp_event.sp, uctx->sp);
 
     // heuristic: only worry about executable pages (rdx)
     // (cuts down on events)
@@ -604,7 +630,9 @@ int kprobe_mprotect(struct pt_regs *ctx)
 
     t = init_stack_pivot_event(&sp_event);
 
+    /* DEBUGGING BEGIN */
     bpf_printk("[mprotect] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
 
     stack_pivot_res = check_stack_pivot(&sp_event, t);
     if (stack_pivot_res != ERR_LOOKS_OK) {
