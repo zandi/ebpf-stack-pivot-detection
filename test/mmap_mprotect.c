@@ -4,8 +4,6 @@
  * use to execute a new program/2nd stage shellcode without using execve.
 */
 
-// TODO: borrow tricks from stackpivot.c to do an mmap/mprotect from a stack pivoted ROP chain
-
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +11,14 @@
 #include <unistd.h>
 
 #include "util.h"
+
+/*
+ default glibc.malloc.mmap_max value is 4096*32; any request above this
+ is fulfilled with mmap (by default). This is currently a false negative
+ blindspot of ours, so to simluate a detectable (currently) stack pivot into
+ the heap, we need smaller stack sizes.
+*/
+#define MALICIOUS_STACK_SIZE (4096 * 16)
 
 static void *misc_page = NULL;
 static void *malicious_stack = NULL;
@@ -53,7 +59,7 @@ void do_mmap_mprotect(void *arg)
     void *myrsp;
     GET_SP(myrsp);
 
-    printf("[I] %d:%d non-leader thread rsp: %p\n", mypid, mytid, myrsp);
+    //printf("[I] %d:%d non-leader thread rsp: %p\n", mypid, mytid, myrsp);
 
     misc_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
     if (misc_page == MAP_FAILED) {
@@ -68,7 +74,7 @@ void do_mmap_mprotect(void *arg)
         exit(-1);
     }
 
-    printf("[I] allocated page with mmap, and remapped it RWX\n");
+    //printf("[I] allocated page with mmap, and remapped it RWX\n");
 }
 
 void do_stack_pivot()
@@ -87,8 +93,8 @@ void do_stack_pivot()
     printf("[I] leave;ret; gadget: %p\n", (gadget_warehouse+8));
 
     // set up big rop chain in new stack we'll pivot to
-    unsigned long *ms = malicious_stack + 2048; // need enough space for functions we call to not segfault
-    *ms++ = (unsigned long) malicious_stack + 2048 + 16; // rbp
+    unsigned long *ms = malicious_stack + (MALICIOUS_STACK_SIZE / 2); // need enough space for functions we call to not segfault
+    *ms++ = (unsigned long) malicious_stack + (MALICIOUS_STACK_SIZE / 2) + 16; // rbp
     // print 1, 2, 3
 /*
     *ms++ = (unsigned long) &printfuncname(1);
@@ -104,7 +110,7 @@ void do_stack_pivot()
     //*/
 
     // smaller rop chain to do stack pivot
-    *saved_rbp = (unsigned long) malicious_stack + 2048;
+    *saved_rbp = (unsigned long) malicious_stack + (MALICIOUS_STACK_SIZE / 2);
     *saved_rip = (unsigned long) (gadget_warehouse+8); // leave;ret;
     *(saved_rip+1) = (unsigned long) 0x4141414141414141; // padding
 
@@ -147,14 +153,13 @@ int main(int argc, char **argv)
     tid = gettid();
     printf("[I] pid:tid %d:%d\n", pid, tid);
 
-    malicious_stack = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
-    if (malicious_stack == MAP_FAILED) {
-        //error
-        perror("mmap");
+    malicious_stack = malloc(MALICIOUS_STACK_SIZE);
+    if (malicious_stack == NULL) {
+        perror("malloc");
         exit(-1);
     }
 
-    printf("[I] malicious stack allocated in page beginning at %p\n", malicious_stack);
+    printf("[I] malicious stack allocated beginning at %p\n", malicious_stack);
 
     res = pthread_attr_init(&attr);
     if (res != 0) {
