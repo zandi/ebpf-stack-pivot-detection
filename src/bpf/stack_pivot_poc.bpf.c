@@ -568,6 +568,224 @@ int kretprobe_execve(struct pt_regs *ctx)
     return 0;
 }
 
+SEC("kprobe/__x64_sys_execveat")
+int kprobe_execveat(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    struct task_struct *t;
+    struct stack_pivot_event sp_event = { 0 };
+    int stack_pivot_res;
+
+    t = init_stack_pivot_event(&sp_event);
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(sp_event.sp, uctx->sp);
+
+    /* DEBUGGING BEGIN */
+    bpf_printk("[execveat] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
+
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[execveat] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
+        }
+    }
+    sp_event.kind = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_fork")
+int kprobe_fork(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    struct task_struct *t;
+    struct stack_pivot_event sp_event = { 0 };
+    int stack_pivot_res;
+
+    t = init_stack_pivot_event(&sp_event);
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(sp_event.sp, uctx->sp);
+
+    /* DEBUGGING BEGIN */
+    bpf_printk("[fork] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
+
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[fork] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
+        }
+    }
+    sp_event.kind = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_vfork")
+int kprobe_vfork(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    struct task_struct *t;
+    struct stack_pivot_event sp_event = { 0 };
+    int stack_pivot_res;
+
+    t = init_stack_pivot_event(&sp_event);
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(sp_event.sp, uctx->sp);
+
+    /* DEBUGGING BEGIN */
+    bpf_printk("[vfork] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
+
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[vfork] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
+        }
+    }
+    sp_event.kind = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+
+    return 0;
+}
+
+SEC("kretprobe/__x64_sys_execveat")
+int kretprobe_execveat(struct pt_regs *ctx)
+{
+    struct stack_pivot_event sp_event;
+    struct task_struct *t;
+    int retval;
+
+    t = init_stack_pivot_event(&sp_event);
+
+    if (t->flags & PF_KTHREAD)
+        return 0;
+
+    // PT_REGS_RC_CORE macro not found. Just use rax, since we're only x86_64
+    BPF_READ(retval, ctx->ax);
+
+    /* DEBUGGING BEGIN */
+    bpf_printk("[execveat return] %d:%d -> %d", sp_event.pid, sp_event.tid, retval);
+    /* DEBUGGING END */
+
+    // invalidate this current task's tracked stack region; after the execve we'll
+    // have an entirely different one, and will need to rediscover it. If we don't
+    // clean up the tracked stack region here, we'll fail subsequent stack pivot checks
+    // for this task.
+    // However, only do so if execve succeeds. If it fails, this task's virtual memory
+    // is not changed.
+    if (retval == 0) {
+        bpf_map_delete_elem(&stack_map, &sp_event.tid);
+    }
+
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_socket")
+int kprobe_socket(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    struct task_struct *t;
+    struct stack_pivot_event sp_event = { 0 };
+    int stack_pivot_res;
+
+    t = init_stack_pivot_event(&sp_event);
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(sp_event.sp, uctx->sp);
+
+    /* DEBUGGING BEGIN */
+    bpf_printk("[socket] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
+
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[socket] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
+        }
+    }
+    sp_event.kind = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_dup2")
+int kprobe_dup2(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    struct task_struct *t;
+    struct stack_pivot_event sp_event = { 0 };
+    int stack_pivot_res;
+
+    t = init_stack_pivot_event(&sp_event);
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(sp_event.sp, uctx->sp);
+
+    /* DEBUGGING BEGIN */
+    bpf_printk("[dup2] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
+
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[dup2] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
+        }
+    }
+    sp_event.kind = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+
+    return 0;
+}
+
+SEC("kprobe/__x64_sys_dup3")
+int kprobe_dup3(struct pt_regs *ctx)
+{
+    struct pt_regs *uctx;
+    struct task_struct *t;
+    struct stack_pivot_event sp_event = { 0 };
+    int stack_pivot_res;
+
+    t = init_stack_pivot_event(&sp_event);
+
+    BPF_READ(uctx, ctx->di);
+    BPF_READ(sp_event.sp, uctx->sp);
+
+    /* DEBUGGING BEGIN */
+    bpf_printk("[dup3] %d:%d", sp_event.pid, sp_event.tid);
+    /* DEBUGGING END */
+
+    stack_pivot_res = check_stack_pivot(&sp_event, t);
+    if (stack_pivot_res != ERR_LOOKS_OK) {
+        bpf_printk("[dup3] not-ok stack pivot check: %x", stack_pivot_res);
+        if (stack_pivot_res == ERR_STACK_PIVOT) {
+            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
+        }
+    }
+    sp_event.kind = stack_pivot_res;
+
+    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+
+    return 0;
+}
+
 SEC("kprobe/__x64_sys_mmap")
 int kprobe_mmap(struct pt_regs *ctx)
 {
