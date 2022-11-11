@@ -26,15 +26,16 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
     BPF_READ(uctx, ctx->di); \
     BPF_READ(sp_event.sp, uctx->sp);
 
-#define BPF_CHECK_RSP_INIT_AND_CHECK_AND_REPORT(handler_fn) \
-    t = init_stack_pivot_event(&sp_event); \
-    /* DEBUGGING BEGIN */ \
-    bpf_printk("[" #handler_fn "] %d:%d", sp_event.pid, sp_event.tid); \
-    /* DEBUGGING END */ \
- \
+#define BPF_CHECK_RSP_INIT_EVENT \
+    t = init_stack_pivot_event(&sp_event);
+
+#define BPF_CHECK_RSP_DEBUG_PRINTK(syscall_fn) \
+    bpf_printk("[" #syscall_fn "] %d:%d", sp_event.pid, sp_event.tid); \
+
+#define BPF_CHECK_RSP_CHECK_AND_REPORT(syscall_fn) \
     stack_pivot_res = check_stack_pivot(&sp_event, t); \
     if (stack_pivot_res != ERR_LOOKS_OK) { \
-        bpf_printk("[" #handler_fn "] not-ok stack pivot check: %x", stack_pivot_res); \
+        bpf_printk("[" #syscall_fn "] not-ok stack pivot check: %x", stack_pivot_res); \
         if (stack_pivot_res == ERR_STACK_PIVOT) { \
             bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp); \
         } \
@@ -43,15 +44,22 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
  \
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 
-#define BPF_CHECK_RSP_ONLY(handler_fn) \
-SEC("kprobe/__x64_sys_" #handler_fn) \
-int kprobe_##handler_fn(struct pt_regs *ctx) \
+#define BPF_CHECK_RSP_INIT_AND_PRINTK_AND_CHECK_AND_REPORT(syscall_fn) \
+    BPF_CHECK_RSP_INIT_EVENT \
+    /* DEBUGGING BEGIN */ \
+    BPF_CHECK_RSP_DEBUG_PRINTK(syscall_fn) \
+    /* DEBUGGING END */ \
+    BPF_CHECK_RSP_CHECK_AND_REPORT(syscall_fn)
+
+#define BPF_CHECK_RSP_ONLY(syscall_fn) \
+SEC("kprobe/__x64_sys_" #syscall_fn) \
+int kprobe_##syscall_fn(struct pt_regs *ctx) \
 { \
     BPF_CHECK_RSP_DECLARE_VARS \
  \
     BPF_CHECK_RSP_READ_RSP \
  \
-    BPF_CHECK_RSP_INIT_AND_CHECK_AND_REPORT(handler_fn) \
+    BPF_CHECK_RSP_INIT_AND_PRINTK_AND_CHECK_AND_REPORT(syscall_fn) \
  \
     return 0; \
 }
@@ -260,19 +268,14 @@ static int check_stack_pivot(struct stack_pivot_event *event, struct task_struct
 SEC("kprobe/__x64_sys_clone")
 int kprobe_clone(struct pt_regs *ctx)
 {
-    struct stack_pivot_event sp_event = { 0 };
-    struct task_struct *t;
-    struct pt_regs *uctx;
-    int stack_pivot_res;
+    BPF_CHECK_RSP_DECLARE_VARS
 
-    t = init_stack_pivot_event(&sp_event);
+    BPF_CHECK_RSP_INIT_EVENT
 
     if (t->flags & PF_KTHREAD)
         return 0;
 
-    uctx = (struct pt_regs *)ctx->di;
-    BPF_READ(sp_event.sp, uctx->sp);
-
+    BPF_CHECK_RSP_READ_RSP
 
     /* DEBUGGING BEGIN */
     struct mm_struct *mm;
@@ -299,17 +302,7 @@ int kprobe_clone(struct pt_regs *ctx)
     /* DEBUGGING END */
 
 
-    // stack pivot check
-    stack_pivot_res = check_stack_pivot(&sp_event, t);
-    if (stack_pivot_res != ERR_LOOKS_OK) {
-        bpf_printk("[clone]\tnot-ok stack pivot check: %x", stack_pivot_res);
-        if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
-        }
-    }
-    sp_event.kind = stack_pivot_res;
-
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+    BPF_CHECK_RSP_CHECK_AND_REPORT(clone)
 
     return 0;
 }
@@ -318,17 +311,14 @@ int kprobe_clone(struct pt_regs *ctx)
 SEC("kprobe/__x64_sys_clone3")
 int kprobe_clone3(struct pt_regs *ctx)
 {
-    struct stack_pivot_event sp_event = { 0 };
-    struct task_struct *t;
-    struct pt_regs *uctx;
-    int stack_pivot_res;
+    BPF_CHECK_RSP_DECLARE_VARS
 
-    t = init_stack_pivot_event(&sp_event);
+    BPF_CHECK_RSP_INIT_EVENT
 
     if (t->flags & PF_KTHREAD)
         return 0;
 
-    BPF_READ(uctx, ctx->di);
+    BPF_CHECK_RSP_READ_RSP
 
     /* DEBUGGING BEGIN */
     struct clone_args *uargs;
@@ -367,19 +357,7 @@ int kprobe_clone3(struct pt_regs *ctx)
     }
     /* DEBUGGING END */
 
-
-    // stack pivot check
-    BPF_READ(sp_event.sp, uctx->sp);
-    stack_pivot_res = check_stack_pivot(&sp_event, t);
-    if (stack_pivot_res != ERR_LOOKS_OK) {
-        bpf_printk("[clone3]\tnot-ok stack pivot check: %x", stack_pivot_res);
-        if (stack_pivot_res == ERR_STACK_PIVOT) {
-            bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp);
-        }
-    }
-    sp_event.kind = stack_pivot_res;
-
-    bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
+    BPF_CHECK_RSP_CHECK_AND_REPORT(clone3)
 
     return 0;
 }
@@ -647,7 +625,7 @@ int kprobe_mmap(struct pt_regs *ctx)
         return 0;
     }
 
-    BPF_CHECK_RSP_INIT_AND_CHECK_AND_REPORT(mmap)
+    BPF_CHECK_RSP_INIT_AND_PRINTK_AND_CHECK_AND_REPORT(mmap)
 
     return 0;
 }
@@ -668,7 +646,7 @@ int kprobe_mprotect(struct pt_regs *ctx)
         return 0;
     }
 
-    BPF_CHECK_RSP_INIT_AND_CHECK_AND_REPORT(mprotect)
+    BPF_CHECK_RSP_INIT_AND_PRINTK_AND_CHECK_AND_REPORT(mprotect)
 
     return 0;
 }
