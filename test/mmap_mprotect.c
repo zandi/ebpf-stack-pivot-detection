@@ -7,6 +7,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -143,11 +144,38 @@ void do_wait_thread(pthread_attr_t *attr)
     printf("[I] thread %ld joined\n", tid);
 }
 
+void usage(char *name)
+{
+    printf("[I] %s [-l/-t]\n", name);
+    printf("\t-l: test detection in thread group leader ('main' thread)\n");
+    printf("\t-t: test detection in non-leader thread ('non-main' thread)\n");
+    printf("\tif no argument is supplied, assume non-leader thread case\n");
+}
+
 int main(int argc, char **argv)
 {
     int res;
     pid_t pid, tid;
     pthread_attr_t attr = {};
+
+    int test_in_thread_group_leader = 0;
+
+    if (argc == 1) {
+        printf("[I] no arguments. testing detection in non-leader thread\n");
+    }
+    else if (argc != 2) {
+        usage(argv[0]);
+        exit(-1);
+    }
+    else {
+        // check for -l or -t (-l == leader, -t == non-leader thread)
+        if (strcmp("-l", argv[1]) == 0) {
+            // check thread group leader detection
+            printf("[I] checking detection in thread group leader\n");
+        } else if (strcmp("-t", argv[1]) == 0) {
+            printf("[I] checking detection in non-leader thread\n");
+        }
+    }
 
     pid = getpid();
     tid = gettid();
@@ -161,20 +189,23 @@ int main(int argc, char **argv)
 
     printf("[I] malicious stack allocated beginning at %p\n", malicious_stack);
 
-    res = pthread_attr_init(&attr);
-    if (res != 0) {
-        perror("pthread_attr_init");
-        exit(1);
-    }
+    // do a stack pivot, either in thread group leader or non-leader thread.
+    if (test_in_thread_group_leader == 1) {
+        do_stack_pivot();
+    } else {
+        res = pthread_attr_init(&attr);
+        if (res != 0) {
+            perror("pthread_attr_init");
+            exit(1);
+        }
 
-    do_wait_thread(&attr);
+        do_wait_thread(&attr);
 
-    do_wait_thread(&attr);
-
-    res = pthread_attr_destroy(&attr);
-    if (res != 0) {
-        perror("pthread_attr_destroy");
-        exit(1);
+        res = pthread_attr_destroy(&attr);
+        if (res != 0) {
+            perror("pthread_attr_destroy");
+            exit(1);
+        }
     }
 
     return 0;
