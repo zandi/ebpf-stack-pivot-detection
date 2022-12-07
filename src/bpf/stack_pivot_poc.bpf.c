@@ -41,6 +41,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
         } \
     } \
     sp_event.kind = stack_pivot_res; \
+    sp_event.location = LOC_##syscall_fn; \
  \
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 

@@ -44,6 +44,21 @@
 #define FIND_VMA_SUCCESS 0
 #define FIND_VMA_FAILURE -1
 
+// a define for each location we can emit a stack pivot event from
+// janky lowercase to work cleanly with macros
+#define LOC_UNKNOWN 0
+#define LOC_clone 1
+#define LOC_clone3 2
+#define LOC_execve 3
+#define LOC_execveat 4
+#define LOC_fork 5
+#define LOC_vfork 6
+#define LOC_socket 7
+#define LOC_dup2 8
+#define LOC_dup3 9
+#define LOC_mmap 10
+#define LOC_mprotect 11
+
 typedef unsigned long ulong;
 
 // refactored stack event type. Only for suspicious/bad events,
@@ -59,6 +74,7 @@ struct stack_pivot_event {
     ulong stack_start;
     ulong stack_end;
     int kind; // "type" is a keyword in rust
+    int location;
 };
 
 #define CLONE_DATA_TYPE 1

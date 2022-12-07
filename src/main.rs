@@ -31,6 +31,19 @@ const STACK_SRC_SELF: i32 = 0;
 const STACK_SRC_UNK: i32 = -1;
 const STACK_SRC_ERR: i32 = -2;
 
+const LOC_UNKNOWN: i32 = 0;
+const LOC_clone: i32 = 1;
+const LOC_clone3: i32 = 2;
+const LOC_execve: i32 = 3;
+const LOC_execveat: i32 = 4;
+const LOC_fork: i32 = 5;
+const LOC_vfork: i32 = 6;
+const LOC_socket: i32 = 7;
+const LOC_dup2: i32 = 8;
+const LOC_dup3: i32 = 9;
+const LOC_mmap: i32 = 10;
+const LOC_mprotect: i32 = 11;
+
 // counters for stack pivot check statistics
 static OK_EVENTS: AtomicU32 = AtomicU32::new(0);
 static NO_VMA_EVENTS: AtomicU32 = AtomicU32::new(0);
@@ -79,6 +92,21 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         _ => "Unknown Error Value",
     };
 
+    let location_label = match event.location {
+        LOC_clone => "clone",
+        LOC_clone3 => "clone3",
+        LOC_execve => "execve",
+        LOC_execveat => "execveat",
+        LOC_fork => "fork",
+        LOC_vfork => "vfork",
+        LOC_socket => "socket",
+        LOC_dup2 => "dup2",
+        LOC_dup3 => "dup3",
+        LOC_mmap => "mmap",
+        LOC_mprotect => "mprotect",
+        _ => "Unknown",
+    };
+
     /*
     let source_label = match event.data.stack_src {
         STACK_SRC_SELF => "Self",
@@ -89,7 +117,7 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     */
 
     if event.kind == ERR_STACK_PIVOT {
-        println!("[stack pivot event]: task: {}:{} event {}, sp: {:#x}, vma: [{:#x}, {:#x})", event.pid, event.tid, error_label, event.sp, event.stack_start, event.stack_end);
+        println!("[stack pivot event]: task: {}:{} event {}, location: {}, sp: {:#x}, vma: [{:#x}, {:#x})", event.pid, event.tid, error_label, location_label, event.sp, event.stack_start, event.stack_end);
     }
 
     0
