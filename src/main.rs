@@ -128,15 +128,6 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         _ => "unknown",
     };
 
-    /*
-    let source_label = match event.data.stack_src {
-        STACK_SRC_SELF => "Self",
-        STACK_SRC_UNK => "Unknown",
-        STACK_SRC_ERR => "Error",
-        _ => "Unknown Source Value",
-    };
-    */
-
     if event.kind == ERR_STACK_PIVOT {
         println!("[stack pivot event]: task: {}:{} event {}, location: {}, sp: {:#x}, vma: [{:#x}, {:#x}), action taken: {}", event.pid, event.tid, error_label, location_label, event.sp, event.stack_start, event.stack_end, action_label);
     }
