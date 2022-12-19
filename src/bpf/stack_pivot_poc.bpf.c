@@ -5,8 +5,6 @@
 
 #include "utils.h"
 
-//#define SIGKILL_ENABLED 1
-
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 // BPF_CHECK_RSP macro definitions
@@ -15,6 +13,9 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 // we have the big macro decomposed into smaller pieces so that mmap/mprotect
 // (and other syscalls in the future) can have heuristics in place to limit
 // overhead, or other such syscall-specific tweaks.
+
+// bad and lazy. Figure out the proper include later
+#define SIGKILL 9
 
 #define BPF_CHECK_RSP_DECLARE_VARS \
     struct pt_regs *uctx; \
@@ -38,6 +39,18 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
         bpf_printk("[" #syscall_fn "] not-ok stack pivot check: %x", stack_pivot_res); \
         if (stack_pivot_res == ERR_STACK_PIVOT) { \
             bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp); \
+            int zero = 0; \
+            int *is_sigkill_enabled = (int *) bpf_map_lookup_elem(&sigkill_enabled, &zero); \
+            if (is_sigkill_enabled) { \
+                bpf_printk("\tsigkill_enabled: 0 -> %u", *is_sigkill_enabled); \
+                if (*is_sigkill_enabled == 1) { \
+                    bpf_printk("\tkilling process"); \
+                    long ret = bpf_send_signal(SIGKILL); \
+                    if (ret != 0) { \
+                        bpf_printk("\terror sending signal: %u", ret); \
+                    } \
+                } \
+            } \
         } \
     } \
     sp_event.kind = stack_pivot_res; \
@@ -96,6 +109,20 @@ struct {
     __type(key, int);
     __type(value, struct stack_data);
 } stack_map SEC(".maps");
+
+/* map storing the singleton boolean for whether or not killing is enabled
+ *
+ * 0 -> {0,1}
+ *     0: disabled (default), 1: enabled
+ *
+ * if enabled, we will send a sigkill to a process which has a stack pivot event
+ */
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, int);
+    __type(value, int);
+} sigkill_enabled SEC(".maps");
 
 // force exporting types to rust skeleton
 #define EXPORT_TYPE(t) \

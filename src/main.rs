@@ -5,7 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 extern crate libbpf_rs;
-use libbpf_rs::RingBufferBuilder;
+use libbpf_rs::{MapFlags, RingBufferBuilder};
+
+extern crate clap;
+use clap::Parser;
 
 #[path = "bpf/.output/stack_pivot_poc.skel.rs"]
 mod stack_pivot_poc;
@@ -51,6 +54,13 @@ static ANCIENT_THREAD_EVENTS: AtomicU32 = AtomicU32::new(0);
 static STACK_PIVOT_EVENTS: AtomicU32 = AtomicU32::new(0);
 static POSSIBLE_GOLANG_STACK_EVENTS: AtomicU32 = AtomicU32::new(0);
 static UNKNOWN_EVENTS: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct ProgramArgs {
+    #[arg(short, long)]
+    sigkill: bool,
+}
 
 fn parse_message<T>(data: &[u8]) -> Option<*const T> {
     if data.len() != mem::size_of::<T>() {
@@ -124,6 +134,12 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
 }
 
 fn main() -> Result<(), Error> {
+
+    let myargs = ProgramArgs::parse();
+
+    println!("[I] sigkill: {}", myargs.sigkill);
+    if myargs.sigkill {
+    }
     
     let skel_builder = StackPivotPocSkelBuilder::default();
     let open_skel = skel_builder.open().unwrap();
@@ -134,6 +150,21 @@ fn main() -> Result<(), Error> {
     ctrlc::set_handler(move || {
         r.store(false, Ordering::SeqCst);
     });
+
+    let mut maps = skel.maps_mut();
+    let sigkill_map = maps.sigkill_enabled();
+    let mut key_var = 0_i32;
+    let mut val_var = match myargs.sigkill {
+        true => 1_i32,
+        false => 0_i32,
+    };
+    let key_bytes = key_var.to_ne_bytes();
+    let val_bytes = val_var.to_ne_bytes();
+
+    sigkill_map
+        .update(&key_bytes, &val_bytes, MapFlags::ANY)
+        .expect("failed to update sigkill setting");
+
 
     let mut perf_builder = RingBufferBuilder::new();
     perf_builder.add(skel.maps().ringbuf_map_stack_pivot_event(), move |data| {
