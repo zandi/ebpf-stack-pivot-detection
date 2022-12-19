@@ -47,6 +47,11 @@ const LOC_dup3: i32 = 9;
 const LOC_mmap: i32 = 10;
 const LOC_mprotect: i32 = 11;
 
+// when a stack pivot is detected, what kind of action do we take?
+const ACTION_UNKNOWN: i32 = 0;
+const ACTION_REPORT: i32 = 1;
+const ACTION_KILL: i32 = 2;
+
 // counters for stack pivot check statistics
 static OK_EVENTS: AtomicU32 = AtomicU32::new(0);
 static NO_VMA_EVENTS: AtomicU32 = AtomicU32::new(0);
@@ -117,6 +122,12 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
         _ => "Unknown",
     };
 
+    let action_label = match event.action {
+        ACTION_REPORT => "report",
+        ACTION_KILL => "kill",
+        _ => "unknown",
+    };
+
     /*
     let source_label = match event.data.stack_src {
         STACK_SRC_SELF => "Self",
@@ -127,7 +138,7 @@ fn stack_pivot_event_handler(data: &[u8]) -> ::std::os::raw::c_int {
     */
 
     if event.kind == ERR_STACK_PIVOT {
-        println!("[stack pivot event]: task: {}:{} event {}, location: {}, sp: {:#x}, vma: [{:#x}, {:#x})", event.pid, event.tid, error_label, location_label, event.sp, event.stack_start, event.stack_end);
+        println!("[stack pivot event]: task: {}:{} event {}, location: {}, sp: {:#x}, vma: [{:#x}, {:#x}), action taken: {}", event.pid, event.tid, error_label, location_label, event.sp, event.stack_start, event.stack_end, action_label);
     }
 
     0

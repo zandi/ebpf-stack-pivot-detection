@@ -59,6 +59,11 @@
 #define LOC_mmap 10
 #define LOC_mprotect 11
 
+// only relevant for if a stack pivot is detected
+#define ACTION_UNKNOWN 0
+#define ACTION_REPORT 1
+#define ACTION_KILL 2
+
 typedef unsigned long ulong;
 
 // refactored stack event type. Only for suspicious/bad events,
@@ -75,6 +80,7 @@ struct stack_pivot_event {
     ulong stack_end;
     int kind; // "type" is a keyword in rust
     int location;
+    int action; // do we kill the process, or just report? (only in case of stack pivot)
 };
 
 #define CLONE_DATA_TYPE 1

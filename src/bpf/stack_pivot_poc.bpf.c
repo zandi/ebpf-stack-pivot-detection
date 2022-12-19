@@ -35,26 +35,31 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define BPF_CHECK_RSP_CHECK_AND_REPORT(syscall_fn) \
     stack_pivot_res = check_stack_pivot(&sp_event, t); \
+    sp_event.location = LOC_##syscall_fn; \
     if (stack_pivot_res != ERR_LOOKS_OK) { \
         bpf_printk("[" #syscall_fn "] not-ok stack pivot check: %x", stack_pivot_res); \
         if (stack_pivot_res == ERR_STACK_PIVOT) { \
             bpf_printk("\t***** stack pivot! sp:%lx *****", sp_event.sp); \
             int zero = 0; \
             int *is_sigkill_enabled = (int *) bpf_map_lookup_elem(&sigkill_enabled, &zero); \
+            sp_event.action = ACTION_UNKNOWN; \
             if (is_sigkill_enabled) { \
                 bpf_printk("\tsigkill_enabled: 0 -> %u", *is_sigkill_enabled); \
                 if (*is_sigkill_enabled == 1) { \
+                    sp_event.action = ACTION_KILL; \
                     bpf_printk("\tkilling process"); \
                     long ret = bpf_send_signal(SIGKILL); \
                     if (ret != 0) { \
                         bpf_printk("\terror sending signal: %u", ret); \
                     } \
                 } \
+                else { \
+                    sp_event.action = ACTION_REPORT; \
+                } \
             } \
         } \
     } \
     sp_event.kind = stack_pivot_res; \
-    sp_event.location = LOC_##syscall_fn; \
  \
     bpf_ringbuf_output(&BPF_MAP_NAME(stack_pivot_event), &sp_event, sizeof(sp_event), 0);
 
