@@ -23,7 +23,16 @@ the stack pointer register to the location of the full ROP chain. This is the
 
 Existing techniques for detecting stack pivots are primarily focused on the
 Windows platform, where stack region information is readily available in
-the Win32 Thread Information Block (TIB). The closest
+the Win32 Thread Information Block (TIB). Other approaches involve either
+compiler-based mitigations which require source code access and recompiling
+the program, or static binary modification of the program.
+
+The closest readily findable existing work to our technique is found in
+ROPGuard which implements a TIB-based check, among others, to protect Windows
+programs at runtime without modification. However our work protects Linux
+programs without this readily available stack information in the kernel, and
+without otherwise modifying the program, by leveraging the more recent eBPF
+system.
 
 # Short ROP Introduction
 
@@ -190,21 +199,21 @@ positives from Golang.
 
 Following are some results from a Proof-of-Concept implementation of this technique.
 
-## stopping proftpd exploit CVE-2020-9273 (do we?)
-
-https://github.com/lockedbyte/CVE-Exploits/blob/master/CVE-2020-9273/exploit_rop.py
-
-We won't be doing this actually, since we can't replicate the memory corruption.
-
 ## real-world stats on event breakdown for a production server
 
-TODO: get this running on some kind of in-use server
+TODO: run some kind of interesting software on test k8s cluster I have
 
 ### false positives, false negatives
 
+TODO: know about some false negatives we found via testing, such as cases where
+mmap'd region for unclear reasons shares a VMA with the stack (debug this case
+again). Also, pivoting elsewhere in the stack won't be detectable with this
+approach. Additionally the Golang allowlist could be a problem if an attacker
+can allocate memory there.
+
 ## performance overhead (debug vs release)
 
-TODO: come up with some test cases to determine this
+TODO: run phoronix on k8s node with some kind of interesting software running
 
 ## Complications (part of results?)
 
@@ -218,6 +227,17 @@ TODO: Is this effective enough for whatever overhead we have?
 
 
 
+
+
+
+
+
+
+
+# Scratch Pad
+
+Everything below here is just misc. notes handy to keep around and will be
+removed at some point.
 
 
 # Existing Research
