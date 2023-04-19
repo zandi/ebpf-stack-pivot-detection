@@ -92,15 +92,15 @@ through `/proc/PID/maps`. While the code itself is simple, the accompanying
 comment illustrates the issue:
 
 ```
-	/*
-	 * We make no effort to guess what a given thread considers to be
-	 * its "stack".  It's not even well-defined for programs written
-	 * languages like Go.
-	 */
+/*
+ * We make no effort to guess what a given thread considers to be
+ * its "stack".  It's not even well-defined for programs written
+ * languages like Go.
+ */
 ```
 
 So, in order to keep track of what 'legitimate' stacks are, we need to track
-stack creation for new processes, user-controlled stacks for multi-threaded
+stack creation for new processes, user-managed stacks for multi-threaded
 processes, and other edge-cases such as Golang's goroutine stacks.
 
 Once we have this, we can simply check the RSP register on important syscalls,
@@ -199,11 +199,35 @@ positives from Golang.
 
 Following are some results from a Proof-of-Concept implementation of this technique.
 
+## Limited Development Testing
+
+Limited testing was done during development running typical Linux desktop
+software, basic benchmarking suites, and simple test programs for various
+languages to test threading & concurrency situations similar to Golang's
+goroutines. For example, web browsing with Firefox 112 was used to exercise the
+PoC against a relatively complicated multi-threaded & multi-process
+application. Additionally Phoronix Test Suite was used to exercise common server
+workloads Apache, Nginx, Redis and Postgresql.
+
+### Concurrency Primitives
+
+Golang's goroutines reliably and trivially exhibited false positive behavior
+with Golang's custom stack regions. Experimentally, only two regions have been
+observed in use by Golang as a stack. Manually adding these to an allowlist
+easily dealt with the issue.
+
+Basic tests with threading & concurrency support in the following languages was
+done, and did not uncover further false positives: Erlang processes
+(lightweight threads), C# Tasks via `System.Threading.Tasks`, Kotlin coroutines
+from `kotlinx.coroutines` running in a native binary built using GraalVM.
+
 ## real-world stats on event breakdown for a production server
 
 TODO: run some kind of interesting software on test k8s cluster I have
 
 ### false positives, false negatives
+
+There are currently no known false positives.
 
 TODO: know about some false negatives we found via testing, such as cases where
 mmap'd region for unclear reasons shares a VMA with the stack (debug this case
@@ -212,6 +236,8 @@ approach. Additionally the Golang allowlist could be a problem if an attacker
 can allocate memory there.
 
 ## performance overhead (debug vs release)
+
+
 
 TODO: run phoronix on k8s node with some kind of interesting software running
 
@@ -225,6 +251,11 @@ VMAs that make them not useful for what we're relying on them for.
 
 TODO: Is this effective enough for whatever overhead we have?
 
+# Further Research
+
+This initial approach to tracking and determining 'legitimate' stack regions works,
+but alternative approaches should be tested in hopes of finding techniques with
+better performance or fewer false negatives.
 
 
 
