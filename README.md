@@ -87,6 +87,18 @@ the bpf program building automatically. You will also need to install the
 `rustfmt` utility for the libbpf-rs crate to build the rust skeleton for
 the eBPF object.
 
+## Building Docker Image
+
+To run on Kubernetes, we need our PoC in a docker container. To build this
+container we will additionally need docker. The `Dockerfile` file has
+everything necessary to build the project in a container and place the main
+build artifact in a docker image. For the convenience of getting this image
+named "stack_pivot_poc", build by running the `build-container.sh` script.
+
+Once built, you can get an interactive shell in the image with
+`docker run --privileged -it stack_pivot_poc`, or just run the PoC itself
+with `docker run --privileged stack_pivot_poc`.
+
 # Running
 
 Binaries will be under `target/`, then under either `debug` or `release`
