@@ -73,11 +73,11 @@ into the region initially set up as the stack.
 
 # Design
 
-We would expect most payloads on linux to use syscalls at some point, such as
-`execve`, `fork`, `mmap` and `mprotect`. We can use eBPF to monitor these
-syscalls and inspect the RSP register (amd64). In order to detect if a stack
-pivot has occured, we will need to determine if the RSP register points into a
-'legitimate' stack region.
+We would expect most exploit payloads on linux to use syscalls at some point,
+such as `execve`, `fork`, `mmap` and `mprotect`. We can use eBPF to monitor
+these syscalls and inspect the RSP register (amd64). In order to detect if a
+stack pivot has occured, we will need to determine if the RSP register points
+into a 'legitimate' stack region.
 
 This is easier said than done, as the userland stack isn't strictly
 well-defined from the perspective of the kernel. The stack of a new process is
@@ -99,7 +99,7 @@ comment illustrates the issue:
  */
 ```
 
-So, in order to keep track of what 'legitimate' stacks are, we need to track
+So, in order to keep track of where 'legitimate' stacks are, we need to track
 stack creation for new processes, user-managed stacks for multi-threaded
 processes, and other edge-cases such as Golang's goroutine stacks.
 
@@ -108,7 +108,7 @@ compare it with that task's 'legitimate' stack region(s), and make a
 determination of "safe" or "unsafe". We can alert on "unsafe" events to have
 detection of in-progress exploitation, and if false positives are eliminated,
 we can even SIGKILL the process from within the kernel and stop the
-exploitation attempt.
+exploitation attempt entirely.
 
 ## Stack and Thread Details
 
@@ -132,7 +132,8 @@ So to bridge userland and kernelland terms, a process is a task group, and a
 thread is a task. A Process ID (PID) in userland is a Thread Group ID (TGID) in
 the kernel, and a Thread ID (TID) in userland is a `pid` in the kernel. From
 now on we'll be using kernel terminology, since the more technical eBPF
-components operate in the kernel.
+components operate in the kernel. Understanding this quirk of terminology
+will help avoid confusion later.
 
 ### Thread Group Leader Stack ("Process")
 
@@ -206,8 +207,8 @@ software, basic benchmarking suites, and simple test programs for various
 languages to test threading & concurrency situations similar to Golang's
 goroutines. For example, web browsing with Firefox 112 was used to exercise the
 PoC against a relatively complicated multi-threaded & multi-process
-application. Additionally Phoronix Test Suite was used to exercise common server
-workloads Apache, Nginx, Redis and Postgresql.
+application. Additionally Phoronix Test Suite was used to exercise common
+server workloads Apache, Nginx, Redis and Postgresql.
 
 ### Concurrency Primitives
 
@@ -225,27 +226,68 @@ from `kotlinx.coroutines` running in a native binary built using GraalVM.
 
 TODO: run some kind of interesting software on test k8s cluster I have
 
-### false positives, false negatives
+### False Positives
 
-There are currently no known false positives.
+There are known false positives with Golang applications, which are currently
+resolved with hardcoded allowed ranges. In testing this has exhibited as running
+for extended periods of time with no false positive, then a sudden burst as
+some thread of a golang application has its stack allocated outside a range
+in the allowlist. Ongoing research can reduce occurences of these false positives.
 
-TODO: know about some false negatives we found via testing, such as cases where
-mmap'd region for unclear reasons shares a VMA with the stack (debug this case
-again). Also, pivoting elsewhere in the stack won't be detectable with this
-approach. Additionally the Golang allowlist could be a problem if an attacker
-can allocate memory there.
+### False Negatives
 
-## performance overhead (debug vs release)
+There are a few false negative cases uncovered in testing, some of which may be
+resolved with further research, and some which may not.
 
+* In certain cases a region allocated with mmap appears to share a VMA with the stack region, leading
+to that mmap'd region being considered part of the stack. Deeper understanding of how
+VMAs are used in memory management may make a solution clear.
 
+* Golang allowlist ranges could allow a full bypass, if an attacker could first
+achieve a controlled memory allocation at that address. For example, if the attacker
+controlled an mmap call.
 
-TODO: run phoronix on k8s node with some kind of interesting software running
+* Pivoting elsewhere in the stack is not detectable with this approach and would
+require stricter CFG enforcement. The full stack region is considered legitimate,
+regardless of how function frames have been allocated in it.
 
-## Complications (part of results?)
+## Debug build Performance Overhead
 
-TODO: main issue is the gaps we have, both to avoid false positives, and due to
-our design of relying on VMAs. We've perhaps made some inaccurate assumptions about
-VMAs that make them not useful for what we're relying on them for.
+Benchmarking was done on a two-node kubernetes cluster (one control plane, one
+worker node) managed by Rancher v2.5.8, running on vSphere, with Kubernetes
+v1.20.11. The worker node was allocated 2 CPU cores at 2GHz, 8GB of RAM,
+running Ubuntu 20.04.4 LTS with kernel 5.15.0-60-generic (x86_64). Besides
+internal Rancher and Kubernetes containers, the cluster was running a Busybox
+pod for miscellaneous in-container testing, an internal docker registry for
+provisioning PoC docker images (installed via helm chart docker-registry-2.2.2,
+app version 2.8.1), and a phoronix pod for running benchmarks. Tests run were:
+pts/apache-3.0.0, pts/build-linux-kernel-1.15.0, pts/osbench-1.0.2,
+pts/perf-bench-1.0.5, and pts/pgbench-1.13.0.
+
+Baseline tests were performed on this cluster on the single worker node, while
+tests with the proof-of-concept had an additional pod with the docker image of
+the proof-of-concept running.
+
+In general tests saw the proof-of-concept with an overhead ranging from
+negligible to 10%, with some notable outliers. Apache saw a 9% decrease in
+requests-per-second, while building Linux took about 5% longer, though with a
+standard deviation at 5.5%. OSBench saw 8% overhead in process creation, 16%
+overhead in program launch, and a massive doubling in time to create new
+threads. Strangely, the proof-of-concept situation was faster than baseline for
+creating files and allocating memory (4% and 5% respectively, sd 2.1% and 0.7%)
+despite only introducing more code to various syscalls. This may be due to
+fluctuations on shared hosting infrastructure or other uncontrolled factors.
+perf-bench's basic syscall benchmark saw negligible overhead, with the baseline
+0.85% slower with a standard deviation of 0.8%. pgbench had similar results,
+with the proof-of-concept case beating baseline in read-only cases by 1.4%
+(standard deviation 1.5%), while having 0.15% overhead in read-write cases
+(standard deviation 2.5%).
+
+Based on this an estimate of 5%-10% overhead for various workloads seems
+reasonable, with some lucky workloads being negligible. This can be reduced by
+omitting certain syscalls from stack pivot checking, short-circuiting
+uninteresting cases such as clone in the thread creation case, or removing the
+currently extensive debugging output.
 
 ## Conclusion
 
