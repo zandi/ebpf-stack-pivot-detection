@@ -1,7 +1,7 @@
 
 # Detecting Stack Pivots in Linux Userland Programs Using eBPF
 
-Michael Zandi
+Michael Zandi, Anthony Blanton
 
 ## Abstract
 
@@ -101,7 +101,7 @@ comment illustrates the issue:
 
 So, in order to keep track of where 'legitimate' stacks are, we need to track
 stack creation for new processes, user-managed stacks for multi-threaded
-processes, and other edge-cases such as Golang's goroutine stacks.
+processes, and other edge-cases such as Golang's user stacks.
 
 Once we have this, we can simply check the RSP register on important syscalls,
 compare it with that task's 'legitimate' stack region(s), and make a
@@ -189,18 +189,24 @@ have stacks which are fixed in size, and cannot dynamically grow.
 
 ### Other Various Edge Cases
 
-The most notable edge case to this has been from Golang. It's unclear exactly
-why (though perhaps it's to implement goroutines and Golang's threading model),
-but syscalls from Golang programs have been observed using unorthodox memory
-regions for their stack, such as `[0xc000000000, 0xc000ffffff)`. In practice
-manually adding these observed regions to an allowlist is enough to avoid false
-positives from Golang.
+The most notable edge case to this has been from Golang. Golang manages its own
+stacks for user code, separate from the system stack which Linux allocates and
+manages for the first thread in a thread group. These user stacks are allocated
+on the Golang runtime's heap, which on the amd64 has somewhat predictable
+locations. The result is that syscalls from Golang programs can have a stack
+pointer in an unusual region, such as [0xc000000000, 0xc000ffffff).
+
+Manually adding regions to an allowlist as they are observed is enough for
+development, but a reliable solution needs to make use of the Golang heap
+internals to eliminate false positives as long-running Golang programs have
+stacks that are relocated, in new heap arenas that can by dynamically
+allocated.
 
 # Results
 
 Following are some results from a Proof-of-Concept implementation of this technique.
 
-## Limited Development Testing
+## In-Development Testing
 
 Limited testing was done during development running typical Linux desktop
 software, basic benchmarking suites, and simple test programs for various
@@ -212,15 +218,20 @@ server workloads Apache, Nginx, Redis and Postgresql.
 
 ### Concurrency Primitives
 
-Golang's goroutines reliably and trivially exhibited false positive behavior
-with Golang's custom stack regions. Experimentally, only two regions have been
-observed in use by Golang as a stack. Manually adding these to an allowlist
-easily dealt with the issue.
+Golang reliably and trivially produced false positives at first, due to its
+runtime-managed user stacks allocated on the Golang runtime's heap.  These
+dynamic stacks appear to be primarily due to Golang's scheduling model to
+enable goroutines as a lightweight concurrency primitive.
+
+Hardcoding these regions into an allowlist as they trigger a false positive was
+enough to quiet Golang-related false positives in development. However more
+rigorous solutions are necessary to be reliable in production environments.
 
 Basic tests with threading & concurrency support in the following languages was
-done, and did not uncover further false positives: Erlang processes
-(lightweight threads), C# Tasks via `System.Threading.Tasks`, Kotlin coroutines
-from `kotlinx.coroutines` running in a native binary built using GraalVM.
+done to search for similar false-positive situations, and did not uncover
+further false positives: Erlang processes (lightweight threads), C# Tasks via
+`System.Threading.Tasks`, Kotlin coroutines from `kotlinx.coroutines` running
+in a native binary built using GraalVM.
 
 ## real-world stats on event breakdown for a production server
 
@@ -231,17 +242,23 @@ TODO: run some kind of interesting software on test k8s cluster I have
 There are known false positives with Golang applications, which are currently
 resolved with hardcoded allowed ranges. In testing this has exhibited as running
 for extended periods of time with no false positive, then a sudden burst as
-some thread of a golang application has its stack allocated outside a range
-in the allowlist. Ongoing research can reduce occurences of these false positives.
+some user thread of a Golang application has its stack allocated outside a range
+in the allowlist.
+
+This is due to Golang user stacks being allocated in the Golang runtime's heap.
+Golang user stacks can be relocated elsewhere in the runtime heap as they grow
+or shrink, and heap arenas can by dynamically allocated. The hints used for
+allocation can allow for a more reliable allowlist, though these hints don't
+guarantee a mapping at that location. This may result in false positives from
+Golang being eliminated in all but rare or difficult to reproduce cases.
+
+Testing has yet to uncover other false positives that couldn't be quickly
+remedied.
 
 ### False Negatives
 
 There are a few false negative cases uncovered in testing, some of which may be
 resolved with further research, and some which may not.
-
-* In certain cases a region allocated with mmap appears to share a VMA with the stack region, leading
-to that mmap'd region being considered part of the stack. Deeper understanding of how
-VMAs are used in memory management may make a solution clear.
 
 * Golang allowlist ranges could allow a full bypass, if an attacker could first
 achieve a controlled memory allocation at that address. For example, if the attacker
@@ -295,13 +312,21 @@ TODO: Is this effective enough for whatever overhead we have?
 
 # Further Research
 
-This initial approach to tracking and determining 'legitimate' stack regions works,
-but alternative approaches should be tested in hopes of finding techniques with
-better performance or fewer false negatives.
+This initial approach to tracking and determining 'legitimate' stack regions
+works, but alternative approaches should be tested in hopes of finding
+techniques with better performance or fewer false negatives.
 
+Research is ongoing for more reliable handling of Golang programs, especially
+as Golang user stacks are grown and relocated in new heap arenas.
 
+More research is needed on how VMAs are allocated and merged, to improve
+distinguishing between different memory regions.
 
+Testing against in-the-wild exploits using a stack pivot is necessary for a
+clearer picture on real-world efficacy.
 
+Running the proof-of-concept on in-production systems and clusters is necessary
+for further stress testing and uncovering of less common false positives.
 
 
 
