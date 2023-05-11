@@ -166,17 +166,47 @@ static int check_stack_pivot(struct stack_pivot_event *event, struct task_struct
     BPF_READ(start_stack, mm->start_stack);
     user_sp = event->sp;
 
-    // TODO: verify correctness against golang runtime/extensive testing
-    if (0xc000000000 <= user_sp && user_sp <= 0xc000ffffff) {
-        event->stack_start = 0xc000000000;
-        event->stack_end = 0xc000ffffff;
+    // old style of check: hardcoded address ranges such as [0xc420000000, 0xc420ffffff)
+
+    // improved check, based on Golang source. Golang user stacks are dynamic,
+    // allocated in the Golang runtime heap. The Golang runtime heap can have
+    // multiple dynamically allocated arenas. These arenas are allocated
+    // via mmap and an address hint is provided to the mmap call, explaining
+    // the predictable addresses. However mmap doesn't guarantee an allocation
+    // at the hint, even if it typically can provide it.
+    //
+    // Heap initialization sets up arena hints depending on architecture and configuration,
+    // see mallocinit in src/runtime/malloc.go. Our expected case of a default config
+    // on amd64 does this with `p = uintptr(i)<<40 | uintptrMask&(0x00c0<<32)` for i in [0x00, 0x7f]
+    // So, at least some simple bit tests on the address can be a useful generalization of the
+    // observed range allowlist technique. Later allocations using the hints use
+    // sysReserve from mem.go, which ultimately gets to an mmap call.
+    //
+    // It could maybe also be refined by analayzing heap arena sizes, so that the bit test
+    // doesn't allow addresses that won't be found in a runtime heap.
+    //
+    // See Anthony's research for details: https://wikis.rim.net/pages/viewpage.action?spaceKey=VR&title=GO+app+stack+monitoring+-+One+stack+to+GO#space-menu-link-content
+
+    // want to check that upper address bytes match hints Golang uses to allocate heap arenas,
+    // which user stacks live in.
+    // upper end of userspace is 0x7fffffffffff
+    // valid values for bytes 0xYXc0XXXXXXXX (X: 0-f, Y=0-7)
+    unsigned long golang_arena_hint_mask = 0x80ff00000000;
+    bpf_printk("[check_stack_pivot] golang check: %lx -(mask)-> %lx", user_sp, user_sp & golang_arena_hint_mask);
+    if ((user_sp & golang_arena_hint_mask) == 0xc000000000) {
+        bpf_printk("[check_stack_pivot]\tgolang detected");
+        unsigned long sp_vma_start, sp_vma_end;
+        res = find_vma_range(mm, user_sp, &sp_vma_start, &sp_vma_end);
+        if (res == FIND_VMA_FAILURE) {
+            bpf_printk("[check_stack_pivot] %d:%d sp has no VMA?", tgid, pid);
+            return ERR_NO_VMA;
+        }
+        event->stack_start = 0;
+        event->stack_end = 0;
+
         return ERR_POSSIBLE_GOLANG_STACK;
     }
-    else if (0xc420000000 <= user_sp && user_sp <= 0xc420ffffff) {
-        event->stack_start = 0xc420000000;
-        event->stack_end = 0xc420ffffff;
-        return ERR_POSSIBLE_GOLANG_STACK;
-    }
+    bpf_printk("[check_stack_pivot]\tgolang not detected");
 
     // look up vmas for mm->start_stack and observed sp
     res = find_vma_range(mm, start_stack, &found_stack_start, &found_stack_end);
@@ -243,7 +273,7 @@ static int check_stack_pivot(struct stack_pivot_event *event, struct task_struct
         }
         else {
             // bad
-            bpf_printk("[check_stack_pivot]\t*** stack pivot detected! ***");
+            bpf_printk("[check_stack_pivot]\t*** stack pivot detected! (leader case) ***");
             event->stack_start = found_stack_start;
             event->stack_end = found_stack_end;
             return ERR_STACK_PIVOT;
@@ -268,7 +298,7 @@ static int check_stack_pivot(struct stack_pivot_event *event, struct task_struct
             // golang exception case already handled above
             else {
                 // bad
-                bpf_printk("[check_stack_pivot]\t*** stack pivot detected! ***");
+                bpf_printk("[check_stack_pivot]\t*** stack pivot detected! (non-leader case) ***");
                 event->stack_start = found_stack_start;
                 event->stack_end = found_stack_end;
                 return ERR_STACK_PIVOT;
