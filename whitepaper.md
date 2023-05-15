@@ -9,7 +9,9 @@ Many modern exploits use Return Oriented Programming (ROP) for their payload,
 and a common technique used in ROP payloads is a stack pivot. This paper
 demonstrates a novel technique for detecting and preventing exploits involving
 a stack pivot on Linux, not requiring any recompilation or static binary
-re-writing/patching of programs.
+re-writing/patching of programs. Measured overhead of an un-optimized
+proof-of-concet ranges from negligible to 10% depending on workload, and false
+positives are currently rare.
 
 In cases where a memory corruption used to overwrite the saved RIP value on the
 stack (overflow, write-what-where, etc) is unable to accomodate a full ROP
@@ -19,7 +21,7 @@ address of), while the initial overwrite uses a small ROP chain that changes
 the stack pointer register to the location of the full ROP chain. This is the
 "stack pivot".
 
-# Existing Research
+# Prior Work & Existing Research
 
 Existing techniques for detecting stack pivots are primarily focused on the
 Windows platform, where stack region information is readily available in
@@ -27,19 +29,20 @@ the Win32 Thread Information Block (TIB). Other approaches involve either
 compiler-based mitigations which require source code access and recompiling
 the program, or static binary modification of the program.
 
-The closest readily findable existing work to our technique is found in
-ROPGuard which implements a TIB-based check, among others, to protect Windows
-programs at runtime without modification. However our work protects Linux
-programs without this readily available stack information in the kernel, and
-without otherwise modifying the program, by leveraging the more recent eBPF
-system.
+The closest readily found existing work to our technique is found in ROPGuard
+which implements a TIB-based check, among others, to protect Windows programs
+at runtime without modification. However our work protects Linux programs
+without this readily available stack information in the kernel, and without any
+program modification, by leveraging the more recent eBPF system.
+
+A more thorough review of prior work can be found in Appendix I.
 
 # Short ROP Introduction
 
 ROP, a generalization of code reuse attacks like return-to-libc, is a response
 to mitigations preventing memory pages from being both writeable and
-executable. Rather than injecting shellcode into the process, existing code
-is reused to have the same effects within the process.
+executable. Rather than injecting shellcode into the process, existing code is
+reused to have the same effects within the process.
 
 Where return-to-libc uses a return pointer overwrite to execute a full libc
 function such as `system`, return oriented programming chains together multiple
@@ -303,14 +306,19 @@ with the proof-of-concept case beating baseline in read-only cases by 1.4%
 Based on this an estimate of 5%-10% overhead for various workloads seems
 reasonable, with some lucky workloads being negligible. This can be reduced by
 omitting certain syscalls from stack pivot checking, short-circuiting
-uninteresting cases such as clone in the thread creation case, or removing the
+uninteresting cases such as clone in the thread creation case, and removing the
 currently extensive debugging output.
 
-## Conclusion
+# Conclusion
 
-TODO: Is this effective enough for whatever overhead we have?
+This demonstrates that the eBPF-based technique of tracking 'legitimate' stacks
+of running programs in order to detect stack pivots on a Linux system is
+feasible, and with further work may be reliable and low-overhead enough to
+implement in production systems. Linux's agnostic approach to where a running
+program should have its stack complicates detection, but existing real-world
+software is still predictable enough for this approach to be amenable.
 
-# Further Research
+## Further Research
 
 This initial approach to tracking and determining 'legitimate' stack regions
 works, but alternative approaches should be tested in hopes of finding
@@ -323,48 +331,32 @@ More research is needed on how VMAs are allocated and merged, to improve
 distinguishing between different memory regions.
 
 Testing against in-the-wild exploits using a stack pivot is necessary for a
-clearer picture on real-world efficacy.
+clearer picture on real-world efficacy. Previous attempts faced issues in
+replicating public exploits.
 
 Running the proof-of-concept on in-production systems and clusters is necessary
 for further stress testing and uncovering of less common false positives.
 
+# Appendix I: Prior Work
 
+This is a quick review of existing research on stopping ROP exploits. We're
+most interested in work that is on Linux, focused on userland ROP rather than
+the kernel, and does not require any modification of the target software.
+None of the reviewed research has all three of these features.
 
-
-
-# Scratch Pad
-
-Everything below here is just misc. notes handy to keep around and will be
-removed at some point.
-
-
-# Existing Research
-
-Here's a few things we turned up with a quick search on google about
-detecting stack pivots in ROP exploits, with a quick description. We're
-chiefly looking for existing work closely related to our work. Specifically,
-1) on Linux 2) focused on userland exploit detection/defense, not the kernel
-3) deployable with existing software without modification (no need to recompile
-userland programs or rebuild kernels).
-
-A number of these have small parts which are reminiscent of what our PoC does;
-compare the RSP register against a known stack region at certain points in
-program execution. However none have all 3 of our desired properties.
-
-All seem to be entirely or mainly focused on Windows except for GRSecurity's
-RAP, which is a source-level approach.
+Included is a brief description of the research, and its applicability for
+our intended use-case.
 
 ## "Defeating ROP Through Denial of Stack Pivot"
 
 https://www.cs.ucr.edu/~heng/pubs/pblocker-acsac15.pdf
 
-PBlocker, LLVM-based. Enforces `StackBase < StackPointer < StackLimit` by " The
+PBlocker, LLVM-based. Enforces `StackBase < StackPointer < StackLimit` by "The
 assertion is performed using code that is instrumented through a LLVM compiler
 pass", by instrumenting instruction(s) that absolutely update the stack
 pointer. PBlocker is described as "a source code level implementation".
 
-Not applicable, modifying binaries is probably not practical for our intended
-use-case.
+Modifying binaries is probably not practical for our intended use-case.
 
 ## "StackPivotChecker" from McAfee
 
@@ -378,10 +370,10 @@ detection/response?
 
 https://dl.packetstormsecurity.net/papers/general/rop-deepdive.pdf
 
-Windows-focused. Examples of an analyst/forensics type person examining a
-malicious file and determining a ROP payload/stack pivot exists. For example,
-using a debugger to analyze how a malicious pdf file is processed, and using
-the StackLimit field in the TEB to detect a stack pivot.
+Windows-focused. Examples of an analyst/forensics role examining a malicious
+file and determining a ROP payload/stack pivot exists. For example, using a
+debugger to analyze how a malicious pdf file is processed, and using the
+StackLimit field in the TEB to detect a stack pivot.
 
 There is analysis of a ROP exploit which uses stack pivots, but is careful to
 avoid stack pivot detection (neat!).
@@ -393,26 +385,23 @@ automated system.
 
 https://ieeexplore.ieee.org/abstract/document/7823777
 
-Need to get full access later. Abstract only mentions Windows and TIB.
+Did not have full access. Abstract only mentions Windows and TIB.
 
 Essentially claims that solutions which compare RSP against the TIB entries are
-vulnerable to those TIB fields being altered from userland (which is
-possible?!?). This should not be a concern on Linux, assuming we protect our hashmap
-storing tid -> range info. Though, that should only be modifiable by root which
-is not actually our threat model for this PoC.
+vulnerable to those TIB fields being altered from userland. This should not be
+a concern on Linux, assuming we protect our hashmap storing tid -> range info.
+Though, that should only be modifiable by root which is not actually our threat
+model for this PoC. Additionally, any hashmaps we use can be frozen to prevent
+modification from userland (depending on Linux kernel version).
 
 ## Patent for "Stack pivot exploit detection and mitigation"
 
 https://patents.google.com/patent/US10853480B2/en
 
-I don't care about patents.
-
 This patent seems to describe checking the stack base/stack limit in the TIB
-against the stack pointer, which is essentially what ROPGuard did long before this
-patent was filed in 2018.
-
-I'm going to assume this patent is unenforceable and shouldn't have been issued
-due to prior work.
+against the stack pointer, which is essentially what ROPGuard and other
+research did long before this patent was filed in 2018. The technique and
+design described in the patent is not new when filed in 2018.
 
 ## ROPGuard
 
@@ -442,6 +431,8 @@ area for further study, but would be more complicated and may have unacceptable
 overhead.
 
 ## grsecurity RAP
+
+https://grsecurity.net/rap_faq
 
 Looks powerful but "RAP is implemented as a GCC compiler plugin.", so not
 exactly applicable for our use-case. Looks like it requires kernel support, and
