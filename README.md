@@ -139,6 +139,12 @@ access the internal registry's service via localhost, letting us push the image
 to the cluster-internal registry. Now when deploying the PoC deployment, the
 image can be pulled from the cluster-internal docker registry.
 
+It's somewhat annoying to have to Ctrl+C the proof-of-concept/kill the pod
+to see stats on observed events. More recent versions print event stats on
+SIGUSR1. To send this to our running PoC in the cluster, we can get a shell
+in the container with `kubectl exec -it $podname -- bash`, then send SIGUSR1
+(signal 10) to pid 1, our running PoC in its own pid namespace, `kill -10 1`.
+
 # Testing
 
 Tests are under 'test' and are currently manual. Running programs normally
