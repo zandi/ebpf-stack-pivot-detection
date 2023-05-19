@@ -23,6 +23,14 @@ the stack pointer register to the location of the full ROP chain. This is the
 
 # Prior Work & Existing Research
 
+| Solution          | Platform        | Userland/Kernalland | Intervention Point                       | Binary Modification Required     | Designed For "Production"                |
+|-------------------|-----------------|---------------------|------------------------------------------|----------------------------------|------------------------------------------|
+| PBlocker          | Linux, Windows? | Userland            | Compile-Time (LLVM-based implementation) | Yes, recompilation from source   | Yes                                      |
+| StackPivotChecker | Windows         | Userland            | Runtime (Hook Windows API)               | No, Windows API Hooking          | No (single-stepping, analyst automation) |
+| ROPGuard          | Windows         | Userland            | Runtime (Hook Windows API)               | No, Windows API Hooking          | Yes (later implemented in EMET)          |
+| Grsecurity RAP    | Linux           | Userland            | Compile-Time (GCC-based implementation)  | Yes, recompilation from source   | Yes                                      |
+| This Work         | Linux           | Userland            | Runtime (eBPF instrumentation in-kernel) | No, Linux kernel instrumentaiton | Yes                                      |
+
 Existing techniques for detecting stack pivots are primarily focused on the
 Windows platform, where stack region information is readily available in
 the Win32 Thread Information Block (TIB). Other approaches involve either
@@ -32,8 +40,13 @@ the program, or static binary modification of the program.
 The closest readily found existing work to our technique is found in ROPGuard
 which implements a TIB-based check, among others, to protect Windows programs
 at runtime without modification. However our work protects Linux programs
-without this readily available stack information in the kernel, and without any
-program modification, by leveraging the more recent eBPF system.
+without this readily available stack information, and without any program
+modification, by leveraging the more recent eBPF system.
+
+We should note that "Baseline Is Fragile: On the Effectiveness of Stack Pivot
+Defense", published at the 2016 IEEE 22nd International Conference on Parallel
+and Distributed Systems (ICPADS) demonstrates defeating TIB-based protections
+by modifying the TIB in the attack, since the TIB is writeable from userland.
 
 A more thorough review of prior work can be found in Appendix I.
 
@@ -435,5 +448,5 @@ overhead.
 https://grsecurity.net/rap_faq
 
 Looks powerful but "RAP is implemented as a GCC compiler plugin.", so not
-exactly applicable for our use-case. Looks like it requires kernel support, and
-to rebuild userland software to include instrumented checks.
+exactly applicable for our use-case. It requires rebuilding software to protect
+it.
