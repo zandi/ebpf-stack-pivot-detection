@@ -210,15 +210,16 @@ have stacks which are fixed in size, and cannot dynamically grow.
 The most notable edge case to this has been from Golang. Golang manages its own
 stacks for user code, separate from the system stack which Linux allocates and
 manages for the first thread in a thread group. These user stacks are allocated
-on the Golang runtime's heap, which on the amd64 has somewhat predictable
-locations. The result is that syscalls from Golang programs can have a stack
-pointer in an unusual region, such as [0xc000000000, 0xc000ffffff).
+on the Golang runtime's heap, which on the amd64 architecture has somewhat
+predictable locations. The result is that syscalls from Golang programs can
+have a stack pointer in an unusual region, such as [0xc000000000,
+0xc000ffffff).
 
 Manually adding regions to an allowlist as they are observed is enough for
-development, but a reliable solution needs to make use of the Golang heap
-internals to eliminate false positives as long-running Golang programs have
-stacks that are relocated, in new heap arenas that can by dynamically
-allocated.
+quick development, but a more reliable solution using knowledge of Golang heap
+internals is necessary to handle long-running and more stressed Golang
+applications. One such solution was used to eliminate observed false positives
+in testing.
 
 # Results
 
@@ -253,25 +254,43 @@ in a native binary built using GraalVM.
 
 ## real-world stats on event breakdown for a production server
 
-TODO: run some kind of interesting software on test k8s cluster I have
+A two-node cluster (control plane node and worker node) was used for testing
+and benchmarking. A fuller description of the cluster setup is included in the
+Performance Overhead section. Besides benchmarks, a small Nextcloud instance
+behind a Traefik reverse proxy/load balancer was used to simulate a more
+realistic workload. Over 5 days of light usage of Treafik+Nextcloud, and 9
+days of running the proof-of-concept on the cluster, no stack pivots or false
+positives were logged.
+
+| Event Kind              | Count     | Description                                                     |
+|-------------------------|-----------|-----------------------------------------------------------------|
+| OK events               | 308592978 | Expected benign case (in "legitimate" stack region)             |
+| "No VMA" events         | 706       | Unable to find the VMA for an address                           |
+| "Ancient Thread" events | 3576      | Thread predates PoC being loaded, cannot locate stack           |
+| "Golang Stack" events   | 22648885  | Detected Golang user stack address                              |
+| Stack Pivot events      | 0         | RSP outside "legitimate" stack region(s), not apparently Golang |
+| "Unknown" events        | 0         | Catch for improperly set return code                            |
 
 ### False Positives
 
-There are known false positives with Golang applications, which are currently
-resolved with hardcoded allowed ranges. In testing this has exhibited as running
-for extended periods of time with no false positive, then a sudden burst as
-some user thread of a Golang application has its stack allocated outside a range
-in the allowlist.
+The most significant false positives were with Golang applications. This is due
+to Golang user stacks being allocated in the Golang runtime's heap. Golang user
+stacks can be relocated elsewhere in the runtime heap as they grow or shrink,
+and heap arenas can by dynamically allocated. Hints are used to guide heap
+arena allocations to addresses with a specific predictable format, but mmap on
+linux doesn't guarantee allocations related to the provided address hint if
+it's unable to allocate at the hint.
 
-This is due to Golang user stacks being allocated in the Golang runtime's heap.
-Golang user stacks can be relocated elsewhere in the runtime heap as they grow
-or shrink, and heap arenas can by dynamically allocated. The hints used for
-allocation can allow for a more reliable allowlist, though these hints don't
-guarantee a mapping at that location. This may result in false positives from
-Golang being eliminated in all but rare or difficult to reproduce cases.
+The current edge-case handling for Golang compares the address against this
+known hint format and allows it if it conforms to the known Golang arena hints.
+Over 9 days of runtime and 5 days of light Traefik+Nextcloud usage no false
+positives were detected. This approach seems sufficient to eliminate
+Golang-based false positives, but testing on in-production clusters will be
+necessary for confidence and understanding of rare circumstances where false
+positives may still occur.
 
-Testing has yet to uncover other false positives that couldn't be quickly
-remedied.
+Testing has yet to uncover other false positives that weren't the result of a
+bug or otherwise couldn't be quickly remedied.
 
 ### False Negatives
 
@@ -360,18 +379,21 @@ This initial approach to tracking and determining 'legitimate' stack regions
 works, but alternative approaches should be tested in hopes of finding
 techniques with better performance or fewer false negatives.
 
-Research is ongoing for more reliable handling of Golang programs, especially
-as Golang user stacks are grown and relocated in new heap arenas.
+Current techniques to detect and allow Golang user stacks need to be tested on
+more in-production clusters to evaluate if Golang false positives can still
+occur, and if so how often.
 
 More research is needed on how VMAs are allocated and merged, to improve
 distinguishing between different memory regions.
+
+Rare cases of a VMA for an address not being found need to be analyzed.
 
 Testing against in-the-wild exploits using a stack pivot is necessary for a
 clearer picture on real-world efficacy. Previous attempts faced issues in
 replicating public exploits.
 
 Running the proof-of-concept on in-production systems and clusters is necessary
-for further stress testing and uncovering of less common false positives.
+for further stress testing and uncovering of rarer false positives.
 
 # Appendix I: Prior Work
 
