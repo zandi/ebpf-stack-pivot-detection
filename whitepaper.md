@@ -301,8 +301,23 @@ Baseline tests were performed on this cluster on the single worker node, while
 tests with the proof-of-concept had an additional pod with the docker image of
 the proof-of-concept running.
 
+| Benchmark                                                 | Baseline   | Proof-of-Concept | Standard Deviation | Better | Overhead                     | Winner           |
+|-----------------------------------------------------------|------------|------------------|--------------------|--------|------------------------------|------------------|
+| Apache HTTP Server - 100 (Reqs/sec)                       | 12616      | 11483            | 0.2%, 0.3%         | More   | 9%                           | Baseline         |
+| Timed Linux Kernel Compilation - defconfig (sec)          | 1026       | 1076             | 2.4%, 5.5%         | Less   | 5%                           | Baseline         |
+| OSBench - Create Files (us/Event)                         | 27.933909  | 26.823105        | 2.1%, 2.1%         | Less   | -4%                          | Proof-of-Concept |
+| OSBench - Create Threads (us/Event)                       | 15.239716  | 35.490195        | 2.3%, 1.2%         | Less   | 57%                          | Baseline         |
+| OSBench - Launch Programs (us/Event)                      | 197.153092 | 233.280659       | 0.5%, 0.7%         | Less   | 15%                          | Baseline         |
+| OSBench - Create Processes (us/Event)                     | 53.283374  | 57.943463        | 1.8%, 2.5%         | Less   | 8%                           | Baseline         |
+| OSBench - Memory Allocations (Ns/Event)                   | 112.217983 | 106.676738       | 0.7%, 0.5%         | Less   | -5%                          | Proof-of-Concept |
+| perf-bench - Syscall Basic (ops/sec)                      | 9033372    | 9111270          | 0.8%, 0.4%         | More   | Negligible (<1%, within SD)  | N/A              |
+| PostgreSQL - 100 - 50 - Read Only (TPS)                   | 53630      | 52927            | 0.4%, 1.5%         | More   | Negligible (1.3%, within SD) | N/A              |
+| PostgreSQL - 100 - 50 - Read Only - Average Latency (ms)  | 0.932      | 0.945            | 0.4%, 1.4%         | Less   | Negligible (1.3%, within SD) | N/A              |
+| PostgreSQL - 100 - 50 - Read Write (TPS)                  | 4431       | 4437             | 2.5%, 2.5%         | More   | Negligible (<1%, within SD)  | N/A              |
+| PostgreSQL - 100 - 50 - Read Write - Average Latency (ms) | 11.291     | 11.275           | 2.5%, 2.5%         | Less   | Negligible (<1%, within SD)  | N/A              |
+
 In general tests saw the proof-of-concept with an overhead ranging from
-negligible to 10%, with some notable outliers. Apache saw a 9% decrease in
+negligible to 15%, with some notable outliers. Apache saw a 9% decrease in
 requests-per-second, while building Linux took about 5% longer, though with a
 standard deviation at 5.5%. OSBench saw 8% overhead in process creation, 16%
 overhead in program launch, and a massive doubling in time to create new
@@ -317,7 +332,9 @@ with the proof-of-concept case beating baseline in read-only cases by 1.4%
 (standard deviation 2.5%).
 
 Based on this an estimate of 5%-10% overhead for various workloads seems
-reasonable, with some lucky workloads being negligible. This can be reduced by
+reasonable though conservative, with some lucky workloads being negligible.
+Since these benchmarks were done with an unoptimized proof-of-concept, these
+can be considered something like worst-case numbers. This can be reduced by
 omitting certain syscalls from stack pivot checking, short-circuiting
 uninteresting cases such as clone in the thread creation case, and removing the
 currently extensive debugging output.
