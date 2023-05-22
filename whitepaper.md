@@ -10,8 +10,10 @@ and a common technique used in ROP payloads is a stack pivot. This paper
 demonstrates a novel technique for detecting and preventing exploits involving
 a stack pivot on Linux, not requiring any recompilation or static binary
 re-writing/patching of programs. Measured overhead of an un-optimized
-proof-of-concet ranges from negligible to 10% depending on workload, and false
-positives are currently rare.
+proof-of-concept ranges from negligible to 15% depending on workload, and false
+positives are currently rare. This demonstrates that eBPF can be used in
+certain circumstances for exploitation countermeasures rather than only
+reporting exploitation attempts.
 
 In cases where a memory corruption used to overwrite the saved RIP value on the
 stack (overflow, write-what-where, etc) is unable to accomodate a full ROP
@@ -348,6 +350,10 @@ implement in production systems. Linux's agnostic approach to where a running
 program should have its stack complicates detection, but existing real-world
 software is still predictable enough for this approach to be amenable.
 
+This also demonstrates that at least in certain cases, using eBPF to implement
+exploitation countermeasures is feasible, allowing for a more proactive defense
+than simple alert-based systems.
+
 ## Further Research
 
 This initial approach to tracking and determining 'legitimate' stack regions
@@ -460,7 +466,7 @@ The rest require reading userland memory which we don't do. This could be an
 area for further study, but would be more complicated and may have unacceptable
 overhead.
 
-## grsecurity RAP
+## Grsecurity RAP
 
 https://grsecurity.net/rap_faq
 
