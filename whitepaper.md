@@ -495,3 +495,93 @@ https://grsecurity.net/rap_faq
 Looks powerful but "RAP is implemented as a GCC compiler plugin.", so not
 exactly applicable for our use-case. It requires rebuilding software to protect
 it.
+
+# Append II: Diagrams
+
+## x86_64 Address Space
+
+Some abridged diagrams of a typical userspace program's virtual memory space on
+amd64, with ASLR turned off to simplify addresses.
+
+### Statically Linked ELF (minimal example)
+
+This program only calls the exit syscall, is statically linked, and doesn't
+include the C standard library. It's a minimal example for a very simple
+address space. Only regions with a name/filled with '.' indicate mapped memory.
+
+```
+┌─────────────┐ 0x 00007fff ffffffff
+│.............│
+│.............│
+│[stack]──────┤ 0x 00007fff fffde000
+│             │
+│             │
+├─────────────┤ 0x 00007fff f7fff000
+│.............│
+│[vdso]───────┤ 0x 00007fff f7ffd000
+│.............│
+│[vvar]───────┤ 0x 00007fff f7ff9000
+│             │
+│             │
+├─────────────┤ 0x 00000000 00401000
+│.............│
+│.............│
+│ELF Image ───┤ 0x 00000000 00400000
+│             │
+│             │
+└─────────────┘ 0x 00000000 00000000
+```
+
+### Dynamically Linked ELF (Python3.10)
+
+This is more complicated, but is more typical of any given running program.
+
+```
+┌─────────────┐ 0x 00007fff ffffffff
+│.............│
+│.............│
+│[stack]──────┤ 0x 00007fff fffde000
+│             │
+│             │
+├─────────────┤ 0x 00007fff f7fff000
+│.............│
+│.............│
+│linker.so────┤ 0x 00007fff f7fc3000 ld-linux-x86-64.so.2
+│.............│
+│[vdso]───────┤ 0x 00007fff f7fc1000
+│.............│
+│[vvar]───────┤ 0x 00007fff f7fbd000
+│.............│
+│.............│ (various shared objects)
+│.............│
+│other .so's──┤ 0x 00007fff f6a34000
+│             │
+│             │
+├─────────────┤ 0x 00005555 55c8f000
+│.............│
+│.............│
+│[heap]───────┤ 0x 00005555 55af8000
+│.............│
+│.............│
+│python3.10───┤ 0x 00005555 55554000
+│             │
+│             │
+└─────────────┘ 0x 00000000 00000000
+```
+
+### Kernel Address Space
+
+For those curious, the upper end of the address space is mostly inaccessible to
+the user, but a simplified version is something like this. Details are
+irrelevant, but can be found in kernel documentation for each architecture's
+memory management.
+
+```
+┌─────────────┐ 0x ffffffff ffffffff
+│.............│
+│.............│
+│kernel───────┤ 0x ffff8000 00000000
+│             │
+│    hole     │
+└─────────────┘ 0x 00008000 00000000
+```
