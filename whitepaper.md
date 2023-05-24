@@ -357,8 +357,8 @@ reasonable though conservative, with some lucky workloads being negligible.
 Since these benchmarks were done with an unoptimized proof-of-concept, these
 can be considered something like worst-case numbers. This can be reduced by
 omitting certain syscalls from stack pivot checking, short-circuiting
-uninteresting cases such as clone in the thread creation case, and removing the
-currently extensive debugging output.
+uninteresting cases such as clone in the thread creation case, removing
+unnecessary VMA lookups, and removing the currently extensive debugging output.
 
 # Conclusion
 
@@ -584,4 +584,98 @@ memory management.
 │             │
 │    hole     │
 └─────────────┘ 0x 00008000 00000000
+```
+
+## ROP Payload Situations
+
+The typical situation regarding the stack and function frames is compared with
+a typical ROP payload, and the situation with a ROP payload using a stack
+pivot.
+
+```
+                     Typical Situation   ROP Payload                  ROP + Stack Pivot
+
+0x 00000000 00000000 ┌───────────────┐   ┌───────────────┐            ┌───────────────┐
+                     │               │   │               │            │               │
+                     │Program────────┤   │Program────────┤            │Program────────┤
+                     │...............│   │...............│◄───gadget1 │...............│◄───gadget1
+                     │...............│   │...............│            │...............│
+                     │Heap───────────┤   │Heap───────────┤            │Heap───────────┤
+                     │...............│   │...............│            │&gadget2       │◄─────────────┐
+                     │...............│   │...............│            │&gadget3       │              │
+                     ├───────────────┤   ├───────────────┤            ├───────────────┤              │
+                     │               │   │               │            │               │              │
+                     │               │   │               │            │               │              │
+                     │Libraries──────┤   │Libraries──────┤            │Libraries──────┤              │
+                     │...............│   │...............│◄───gadget2 │...............│◄───gadget2   │
+                     │...............│   │...............│◄ ──gadget3 │...............│◄───gadget3   │
+                     ├───────────────┤   ├───────────────┤            ├───────────────┤              │
+                     │               │   │               │            │               │              │
+                     │               │   │               │            │               │              │
+                     │Current Frame──┤   │Current Frame──┤            │Current Frame──┤              │
+                     │...............│   │...............│            │...............│              │
+                     │...............│   │...............│            │...............│              │
+                     │local buffer───┤   │overflow!~~~~~~│            │overflow!~~~~~~│              │
+                     │...............│   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │...............│   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │...............│   │(padding)~~~~~~│            │(padding)~~~~~~│              │
+                     ├───────────────┤   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │Saved RBP      │   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │Saved RIP      │   │&gadget1       │            │&pivot_gadget  ├───Update RSP─┘
+                     │Previous Frame─┤   │&gadget2       │            │Previous Frame─┤
+                     │...............│   │&gadget3       │            │...............│
+                     │...............│   │    .          │            │...............│
+                     │...............│   │    .          │            │...............│
+                     │...............│   │    .          │            │...............│
+0x 00007fff ffffffff └───────────────┘   └───────────────┘            └───────────────┘
+```
+
+## pid/tid and tgid/pid terminology
+
+In userland we have Process ID and Thread ID. In kernel we have Thread Group ID
+and Process ID, since threads are all just tasks.
+
+```
+   ┌──────────────────────────┐
+   │                          │
+   │            ┌─────┬─────┐ │
+   │            │PID  │  TID│ │
+   │            └─────┴─────┘ │
+   │               ▲     ▲    │
+   │ User Land     │     │    │
+   ├───────────────┼─────┼────┤
+   │ Kernel Land   │     │    │
+   │               ▼     ▼    │
+   │            ┌─────┬─────┐ │
+   │            │TGID │  PID│ │
+   │            └─────┴─────┘ │
+   │                          │
+   └──────────────────────────┘
+```
+
+## General Proof-of-Concept design
+
+```
+ ┌─Process─┐          ┌─Kernel─────────────────────────────────────────────────────────────┐
+ │Proof-of-│          │                                                                    │
+ │Concept  │◄───────────Ringbuf Events─────────┬───────┐                                   │
+ │Agent    │          │                        │       │                                   │
+ └─────────┘          │  ┌─eBPF Program─┐      │       │                                   │
+                      │  │mprotect      │      │       │                                   │
+                      │  │mmap          │      │       │                                   │
+                      │  │execve        │  ┌───┴─────┐ │      ┌─eBPF Program───┐           │
+                      │  │execveat      ├─►│Check RSP│ │   ┌─►│wake_up_new_task├─Update──┐ │
+┌─Process──┐          │  │socket        │  └─────────┘ │   │  └────────────────┘         │ │
+│Arbitrary │          │  │dup2          │   ▲          │   │                             │ │
+│          ├─syscall────►│dup3          │   │          │   │  ┌─eBPF Retprobe───┐        │ │
+│ Program  │          │  ├──────────────┤   │          │   │  │execve (return)  ├─Delete─┤ │
+└──────────┘          │  │fork          │   │  ┌───────┴─┐ │  │execveat (return)│        │ │
+                      │  │vfork         ├─────►│Check RSP├─┘  └─────────────────┘        │ │
+                      │  │clone         │   │  └─────────┘                               │ │
+                      │  │clone3        │   │   ▲                                        │ │
+                      │  ├──────────────┤   │   │      ┌─eBPF Map────────────┐           │ │
+                      │  │exit          │   └───┴─Read─┤Tracked Stack Regions│◄──────────┘ │
+                      │  └───────┬──────┘              └──────▲──────────────┘             │
+                      │          └─────────Delete─────────────┘                            │
+                      └────────────────────────────────────────────────────────────────────┘
 ```
