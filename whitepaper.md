@@ -1,5 +1,5 @@
 
-# Detecting Stack Pivots in Linux Userland Programs Using eBPF
+# Detecting and Preventing Stack Pivots in Linux Userland Programs Using eBPF
 
 Michael Zandi, Anthony Blanton
 
