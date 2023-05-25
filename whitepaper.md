@@ -5,6 +5,10 @@ Michael Zandi, Anthony Blanton
 
 ## Abstract
 
+The Linux kernel's eBPF subsystem is perfect for getting telemetry from the
+kernel to use for things such as exploit detection, but can eBPF be used for
+exploit prevention? The case of ROP using a stack pivot was examined.
+
 Many modern exploits use Return Oriented Programming (ROP) for their payload,
 and a common technique used in ROP payloads is a stack pivot. This paper
 demonstrates a novel technique for detecting and preventing exploits involving
@@ -64,7 +68,7 @@ function such as `system`, return oriented programming chains together multiple
 short instruction sequences referred to as 'gadgets'. Gadgets are one or more
 instructions that end in a return instruction, such as `pop r12 ; ret ;`.
 Through clever combination these gadgets can often be used to set registers and
-call syscalls, as effectively as traditional shellcode. These fuller
+call syscalls as effectively as traditional shellcode. These fuller
 combinations of ROP gadgets are called ROP chains.
 
 Where a typical shellcode-based exploit would overwrite the saved return
@@ -88,6 +92,47 @@ and `ret` instructions will return to gadget addresses like before.
 
 The important difference is that the RSP register may no longer be pointing
 into the region initially set up as the stack.
+
+```
+                     Typical Situation   ROP Payload                  ROP + Stack Pivot
+
+0x 00000000 00000000 ┌───────────────┐   ┌───────────────┐            ┌───────────────┐
+                     │               │   │               │            │               │
+                     │Program────────┤   │Program────────┤            │Program────────┤
+                     │...............│   │...............│◄───gadget1 │...............│◄───gadget1
+                     │...............│   │...............│            │...............│
+                     │Heap───────────┤   │Heap───────────┤            │Heap───────────┤
+                     │...............│   │...............│            │&gadget2       │◄─────────────┐
+                     │...............│   │...............│            │&gadget3       │              │
+                     ├───────────────┤   ├───────────────┤            ├───────────────┤              │
+                     │               │   │               │            │               │              │
+                     │               │   │               │            │               │              │
+                     │Libraries──────┤   │Libraries──────┤            │Libraries──────┤              │
+                     │...............│   │...............│◄───gadget2 │...............│◄───gadget2   │
+                     │...............│   │...............│◄ ──gadget3 │...............│◄───gadget3   │
+                     ├───────────────┤   ├───────────────┤            ├───────────────┤              │
+                     │               │   │               │            │               │              │
+                     │               │   │               │            │               │              │
+                     │Current Frame──┤   │Current Frame──┤            │Current Frame──┤              │
+                     │...............│   │...............│            │...............│              │
+                     │...............│   │...............│            │...............│              │
+                     │local buffer───┤   │overflow!~~~~~~│            │overflow!~~~~~~│              │
+                     │...............│   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │...............│   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │...............│   │(padding)~~~~~~│            │(padding)~~~~~~│              │
+                     ├───────────────┤   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │Saved RBP      │   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
+                     │Saved RIP      │   │&gadget1       │            │&pivot_gadget  ├───Update RSP─┘
+                     │Previous Frame─┤   │&gadget2       │            │Previous Frame─┤
+                     │...............│   │&gadget3       │            │...............│
+                     │...............│   │    .          │            │...............│
+                     │...............│   │    .          │            │...............│
+                     │...............│   │    .          │            │...............│
+0x 00007fff ffffffff └───────────────┘   └───────────────┘            └───────────────┘
+```
+
+> Figure: Typical ROP payload and ROP + Stack Pivot situations, as compared
+> with a typical non-ROP situation.
 
 # Design
 
@@ -128,6 +173,33 @@ detection of in-progress exploitation, and if false positives are eliminated,
 we can even SIGKILL the process from within the kernel and stop the
 exploitation attempt entirely.
 
+```
+ ┌─Process─┐          ┌─Kernel─────────────────────────────────────────────────────────────┐
+ │Proof-of-│          │                                                                    │
+ │Concept  │◄───────────Ringbuf Events─────────┬───────┐                                   │
+ │Agent    │          │                        │       │                                   │
+ └─────────┘          │  ┌─eBPF Program─┐      │       │                                   │
+                      │  │mprotect      │      │       │                                   │
+                      │  │mmap          │      │       │                                   │
+                      │  │execve        │  ┌───┴─────┐ │      ┌─eBPF Program───┐           │
+                      │  │execveat      ├─►│Check RSP│ │   ┌─►│wake_up_new_task├─Update──┐ │
+┌─Process──┐          │  │socket        │  └─────────┘ │   │  └────────────────┘         │ │
+│Arbitrary │          │  │dup2          │   ▲          │   │                             │ │
+│          ├─syscall────►│dup3          │   │          │   │  ┌─eBPF Retprobe───┐        │ │
+│ Program  │          │  ├──────────────┤   │          │   │  │execve (return)  ├─Delete─┤ │
+└──────────┘          │  │fork          │   │  ┌───────┴─┐ │  │execveat (return)│        │ │
+                      │  │vfork         ├─────►│Check RSP├─┘  └─────────────────┘        │ │
+                      │  │clone         │   │  └─────────┘                               │ │
+                      │  │clone3        │   │   ▲                                        │ │
+                      │  ├──────────────┤   │   │      ┌─eBPF Map────────────┐           │ │
+                      │  │exit          │   └───┴─Read─┤Tracked Stack Regions│◄──────────┘ │
+                      │  └───────┬──────┘              └──────▲──────────────┘             │
+                      │          └─────────Delete─────────────┘                            │
+                      └────────────────────────────────────────────────────────────────────┘
+```
+
+> Figure: Proof-of-Concept design diagram
+
 ## Stack and Thread Details
 
 We need to understand some details of stacks and threads in order to keep track
@@ -145,6 +217,27 @@ However from the perspective of the Linux kernel all threads are tasks, have
 their own `task_struct`, and belong to a thread group. All thread groups have
 at least one task, and the first task in a thread group has a task ID matching
 the thread group's ID.
+
+```
+   ┌──────────────────────────┐
+   │                          │
+   │            ┌─────┬─────┐ │
+   │            │PID  │  TID│ │
+   │            └─────┴─────┘ │
+   │               ▲     ▲    │
+   │ User Land     │     │    │
+   ├───────────────┼─────┼────┤
+   │ Kernel Land   │     │    │
+   │               ▼     ▼    │
+   │            ┌─────┬─────┐ │
+   │            │TGID │  PID│ │
+   │            └─────┴─────┘ │
+   │                          │
+   └──────────────────────────┘
+```
+
+> Figure: Inconsistencies between user and kernel terminology around process &
+> thread IDs
 
 So to bridge userland and kernelland terms, a process is a task group, and a
 thread is a task. A Process ID (PID) in userland is a Thread Group ID (TGID) in
@@ -220,6 +313,43 @@ quick development, but a more reliable solution using knowledge of Golang heap
 internals is necessary to handle long-running and more stressed Golang
 applications. One such solution was used to eliminate observed false positives
 in testing.
+
+```
+┌─Virtual Memory ────────────────────┐ 0x 00007fff ffffffff
+│....................................│
+│....................................│
+│....................................│
+│Stack───────────────────────────────┤ 0x 00007fff fffd6000
+│                                    │
+├────────────────────────────────────┤ 0x 00007fff b7d00000
+│....................................│
+│pthread stack───────────────────────┤ 0x 00007fff b7cc0000
+│                                    │
+├────────────────────────────────────┤ 0x 00007fff bc444000
+│................. ..................│
+│pthread stack───────────────────────┤ 0x 00007fff bc404000
+│                                    │
+├────────────────────────────────────┤ 0x 00007fff b4a7e000
+│....................................│
+│pthread stack───────────────────────┤ 0x 00007fff b4a3e000
+│                                    │
+│                                    │
+│                                    │
+├────────────────────────────────────┤ 0x 000000c4 21000000
+│....................................│
+│Golang user stack───────────────────┤ 0x 000000c4 20000000
+│                                    │
+├────────────────────────────────────┤ 0x 000000c0 04000000
+│0x 000000c0 03631270................│
+│0x 000000c0 01fc4670..(Example SPs).│
+│0x 000000c0 0003c000................│
+│Golang user stack───────────────────┤ 0x 000000c0 00000000
+│                                    │
+│                                    │
+└────────────────────────────────────┘ 0x 00000000 00000000
+```
+
+> Figure: Examples of observed legitimate stack regions
 
 # Results
 
@@ -496,7 +626,7 @@ Looks powerful but "RAP is implemented as a GCC compiler plugin.", so not
 exactly applicable for our use-case. It requires rebuilding software to protect
 it.
 
-# Append II: Diagrams
+# Append II: Extra Diagrams
 
 ## x86_64 Address Space
 
@@ -583,140 +713,6 @@ memory management.
 │kernel───────┤ 0x ffff8000 00000000
 │             │
 │    hole     │
+│             │
 └─────────────┘ 0x 00008000 00000000
-```
-
-## ROP Payload Situations
-
-The typical situation regarding the stack and function frames is compared with
-a typical ROP payload, and the situation with a ROP payload using a stack
-pivot.
-
-```
-                     Typical Situation   ROP Payload                  ROP + Stack Pivot
-
-0x 00000000 00000000 ┌───────────────┐   ┌───────────────┐            ┌───────────────┐
-                     │               │   │               │            │               │
-                     │Program────────┤   │Program────────┤            │Program────────┤
-                     │...............│   │...............│◄───gadget1 │...............│◄───gadget1
-                     │...............│   │...............│            │...............│
-                     │Heap───────────┤   │Heap───────────┤            │Heap───────────┤
-                     │...............│   │...............│            │&gadget2       │◄─────────────┐
-                     │...............│   │...............│            │&gadget3       │              │
-                     ├───────────────┤   ├───────────────┤            ├───────────────┤              │
-                     │               │   │               │            │               │              │
-                     │               │   │               │            │               │              │
-                     │Libraries──────┤   │Libraries──────┤            │Libraries──────┤              │
-                     │...............│   │...............│◄───gadget2 │...............│◄───gadget2   │
-                     │...............│   │...............│◄ ──gadget3 │...............│◄───gadget3   │
-                     ├───────────────┤   ├───────────────┤            ├───────────────┤              │
-                     │               │   │               │            │               │              │
-                     │               │   │               │            │               │              │
-                     │Current Frame──┤   │Current Frame──┤            │Current Frame──┤              │
-                     │...............│   │...............│            │...............│              │
-                     │...............│   │...............│            │...............│              │
-                     │local buffer───┤   │overflow!~~~~~~│            │overflow!~~~~~~│              │
-                     │...............│   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
-                     │...............│   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
-                     │...............│   │(padding)~~~~~~│            │(padding)~~~~~~│              │
-                     ├───────────────┤   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
-                     │Saved RBP      │   │~~~~~~~~~~~~~~~│            │~~~~~~~~~~~~~~~│              │
-                     │Saved RIP      │   │&gadget1       │            │&pivot_gadget  ├───Update RSP─┘
-                     │Previous Frame─┤   │&gadget2       │            │Previous Frame─┤
-                     │...............│   │&gadget3       │            │...............│
-                     │...............│   │    .          │            │...............│
-                     │...............│   │    .          │            │...............│
-                     │...............│   │    .          │            │...............│
-0x 00007fff ffffffff └───────────────┘   └───────────────┘            └───────────────┘
-```
-
-## pid/tid and tgid/pid terminology
-
-In userland we have Process ID and Thread ID. In kernel we have Thread Group ID
-and Process ID, since threads are all just tasks.
-
-```
-   ┌──────────────────────────┐
-   │                          │
-   │            ┌─────┬─────┐ │
-   │            │PID  │  TID│ │
-   │            └─────┴─────┘ │
-   │               ▲     ▲    │
-   │ User Land     │     │    │
-   ├───────────────┼─────┼────┤
-   │ Kernel Land   │     │    │
-   │               ▼     ▼    │
-   │            ┌─────┬─────┐ │
-   │            │TGID │  PID│ │
-   │            └─────┴─────┘ │
-   │                          │
-   └──────────────────────────┘
-```
-
-## General Proof-of-Concept design
-
-```
- ┌─Process─┐          ┌─Kernel─────────────────────────────────────────────────────────────┐
- │Proof-of-│          │                                                                    │
- │Concept  │◄───────────Ringbuf Events─────────┬───────┐                                   │
- │Agent    │          │                        │       │                                   │
- └─────────┘          │  ┌─eBPF Program─┐      │       │                                   │
-                      │  │mprotect      │      │       │                                   │
-                      │  │mmap          │      │       │                                   │
-                      │  │execve        │  ┌───┴─────┐ │      ┌─eBPF Program───┐           │
-                      │  │execveat      ├─►│Check RSP│ │   ┌─►│wake_up_new_task├─Update──┐ │
-┌─Process──┐          │  │socket        │  └─────────┘ │   │  └────────────────┘         │ │
-│Arbitrary │          │  │dup2          │   ▲          │   │                             │ │
-│          ├─syscall────►│dup3          │   │          │   │  ┌─eBPF Retprobe───┐        │ │
-│ Program  │          │  ├──────────────┤   │          │   │  │execve (return)  ├─Delete─┤ │
-└──────────┘          │  │fork          │   │  ┌───────┴─┐ │  │execveat (return)│        │ │
-                      │  │vfork         ├─────►│Check RSP├─┘  └─────────────────┘        │ │
-                      │  │clone         │   │  └─────────┘                               │ │
-                      │  │clone3        │   │   ▲                                        │ │
-                      │  ├──────────────┤   │   │      ┌─eBPF Map────────────┐           │ │
-                      │  │exit          │   └───┴─Read─┤Tracked Stack Regions│◄──────────┘ │
-                      │  └───────┬──────┘              └──────▲──────────────┘             │
-                      │          └─────────Delete─────────────┘                            │
-                      └────────────────────────────────────────────────────────────────────┘
-```
-
-## Example Stack Regions
-
-Below is a basic illustration of some observed legitimate stack regions.
-This includes the kernel-managed 'main' stack, pthread-managed thread
-stacks, and Golang user stacks.
-
-```
-┌─Virtual Memory ────────────────────┐ 0x 00007fff ffffffff
-│....................................│
-│....................................│
-│....................................│
-│Stack───────────────────────────────┤ 0x 00007fff fffd6000
-│                                    │
-├────────────────────────────────────┤ 0x 00007fff b7d00000
-│....................................│
-│pthread stack───────────────────────┤ 0x 00007fff b7cc0000
-│                                    │
-├────────────────────────────────────┤ 0x 00007fff bc444000
-│................. ..................│
-│pthread stack───────────────────────┤ 0x 00007fff bc404000
-│                                    │
-├────────────────────────────────────┤ 0x 00007fff b4a7e000
-│....................................│
-│pthread stack───────────────────────┤ 0x 00007fff b4a3e000
-│                                    │
-│                                    │
-│                                    │
-├────────────────────────────────────┤ 0x 000000c4 21000000
-│....................................│
-│Golang user stack───────────────────┤ 0x 000000c4 20000000
-│                                    │
-├────────────────────────────────────┤ 0x 000000c0 04000000
-│0x 000000c0 03631270................│
-│0x 000000c0 01fc4670..(Example SPs).│
-│0x 000000c0 0003c000................│
-│Golang user stack───────────────────┤ 0x 000000c0 00000000
-│                                    │
-│                                    │
-└────────────────────────────────────┘ 0x 00000000 00000000
 ```
