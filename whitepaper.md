@@ -170,8 +170,8 @@ Once we have this, we can simply check the RSP register on important syscalls,
 compare it with that task's 'legitimate' stack region(s), and make a
 determination of "safe" or "unsafe". We can alert on "unsafe" events to have
 detection of in-progress exploitation, and if false positives are eliminated,
-we can even SIGKILL the process from within the kernel and stop the
-exploitation attempt entirely.
+we can even SIGKILL the process from within the kernel using `bpf_send_signal`
+and stop the exploitation attempt entirely.
 
 ```
  ┌─Process─┐          ┌─Kernel─────────────────────────────────────────────────────────────┐
@@ -305,14 +305,15 @@ stacks for user code, separate from the system stack which Linux allocates and
 manages for the first thread in a thread group. These user stacks are allocated
 on the Golang runtime's heap, which on the amd64 architecture has somewhat
 predictable locations. The result is that syscalls from Golang programs can
-have a stack pointer in an unusual region, such as [0xc000000000,
-0xc000ffffff).
+have a stack pointer in an unusual region, such as `[0xc000000000,
+0xc000ffffff).`
 
 Manually adding regions to an allowlist as they are observed is enough for
 quick development, but a more reliable solution using knowledge of Golang heap
 internals is necessary to handle long-running and more stressed Golang
-applications. One such solution was used to eliminate observed false positives
-in testing.
+applications. One such solution taking advantage of predictable hint addresses
+provided to mmap when allocating new Golang heap arenas was used to eliminate
+observed false positives in testing.
 
 ```
 ┌─Virtual Memory ────────────────────┐ 0x 00007fff ffffffff
@@ -353,7 +354,8 @@ in testing.
 
 # Results
 
-Following are some results from a Proof-of-Concept implementation of this technique.
+Following are some results from testing a Proof-of-Concept implementation of
+this technique.
 
 ## In-Development Testing
 
@@ -382,9 +384,9 @@ further false positives: Erlang processes (lightweight threads), C# Tasks via
 `System.Threading.Tasks`, Kotlin coroutines from `kotlinx.coroutines` running
 in a native binary built using GraalVM.
 
-## real-world stats on event breakdown for a production server
+## Events From Test Kubernetes Cluster
 
-A two-node cluster (control plane node and worker node) was used for testing
+A two-node Kubernetes cluster (control plane node and worker node) was used for testing
 and benchmarking. A fuller description of the cluster setup is included in the
 Performance Overhead section. Besides benchmarks, a small Nextcloud instance
 behind a Traefik reverse proxy/load balancer was used to simulate a more
@@ -394,10 +396,10 @@ positives were logged.
 
 | Event Kind              | Count     | Description                                                     |
 |-------------------------|-----------|-----------------------------------------------------------------|
-| OK events               | 308592978 | Expected benign case (in "legitimate" stack region)             |
+| OK events               | 308592978 | Expected benign case (RSP in "legitimate" stack region)         |
 | "No VMA" events         | 706       | Unable to find the VMA for an address                           |
 | "Ancient Thread" events | 3576      | Thread predates PoC being loaded, cannot locate stack           |
-| "Golang Stack" events   | 22648885  | Detected Golang user stack address                              |
+| "Golang Stack" events   | 22648885  | Detected Golang user stack address, assumed legitimate          |
 | Stack Pivot events      | 0         | RSP outside "legitimate" stack region(s), not apparently Golang |
 | "Unknown" events        | 0         | Catch for improperly set return code                            |
 
@@ -517,6 +519,11 @@ More research is needed on how VMAs are allocated and merged, to improve
 distinguishing between different memory regions.
 
 Rare cases of a VMA for an address not being found need to be analyzed.
+
+Techniques for better handling of "Ancient" thread events should be
+explored. For example, a Trust-on-First-Use approach where the VMA used
+by RSP on the first monitored syscall of a thread with no tracked stack
+is trusted and saved for later checks may be sufficient.
 
 Testing against in-the-wild exploits using a stack pivot is necessary for a
 clearer picture on real-world efficacy. Previous attempts faced issues in
