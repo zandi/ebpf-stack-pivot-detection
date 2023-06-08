@@ -24,7 +24,7 @@ CSHARP_BINS := $(patsubst %.cs,%.exe,$(CSHARP_SRCS))
 all: $(RAW) $(C_BINS) $(CSHARP_BINS)
 
 %.elf: %.s
-	@$(CC) $(SHELLCODE_FLAGS) $< -o $@
+	@$(CC) $(SHELLCODE_CFLAGS) $< -o $@
 
 %.raw: %.elf
 	objcopy --dump-section .text=$@ $<

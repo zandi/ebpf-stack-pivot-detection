@@ -87,6 +87,19 @@ the bpf program building automatically. You will also need to install the
 `rustfmt` utility for the libbpf-rs crate to build the rust skeleton for
 the eBPF object.
 
+## Building Docker Image
+
+To run on Kubernetes, we need our PoC in a docker container. To build this
+container we will additionally need docker. The `Dockerfile` file has
+everything necessary to build the project in a container and place the main
+build artifact in a docker image. For the convenience of getting this image
+named "stack_pivot_poc", build by running the `build-container.sh` script.
+
+Once built, you can get an interactive shell in the image with
+`docker run --privileged -it stack_pivot_poc`, or just run the PoC itself
+with `docker run --privileged stack_pivot_poc`. The `--privileged` flag is
+necessary to use eBPF.
+
 # Running
 
 Binaries will be under `target/`, then under either `debug` or `release`
@@ -96,6 +109,41 @@ must be run as root (or presumably with `CAP_SYS_BPF`).
 Once running the eBPF programs will start tracking thread stacks and checking
 for stack pivots, reporting events to userland for display by the userland
 agent.
+
+## Kubernetes
+
+The PoC can be run on a kubernetes cluster by uploading the built docker image
+to a docker registry accessible to the cluster's worker nodes. Use `docker tag`
+to tag the local built image name to a `$registry/stack_pivot_poc` name, where
+`$registry` is the ip/domain name of the registry, then use `docker push` to
+push the image to the registry. An example registry is `localhost:8080`. The
+example deployment yaml file `kubernetes/stack_pivot_poc.yaml` should then be
+edited so the image name points to this repository. Once this is done the
+deployment can be applied with `kubectl apply -f`, and later removed with
+`kubectl delete -f`.
+
+In my own testing I used a docker registry within the kubernetes cluster
+itself. This involved installing a docker registry deployment via helm, taking
+note of the internal cluster IP for the accompanying service, generating a
+self-signed CA cert (and key) for the registry service (with appropriate
+Subject Alternative Name for the IP/url of the service), placing this cert and
+its accompanying key in a tls secret for the cluster, providing this secret
+name to the docker-registry deployment by using `--set` with the
+`tlsSecretName` value and running `helm upgrade`, and finally placing the
+certificate on worker nodes under `/etc/docker/certs.d/$registry/ca.crt`, where
+`$registry` is the ip/url of the registry, such as `10.43.250.40:5000`. This
+way the worker node can successfully authenticate the internal registry's
+certificate and pull the image. Finally, using the notes given by the helm
+chart for docker-registry when installing, we can use `kubectl port-forward` to
+access the internal registry's service via localhost, letting us push the image
+to the cluster-internal registry. Now when deploying the PoC deployment, the
+image can be pulled from the cluster-internal docker registry.
+
+It's somewhat annoying to have to Ctrl+C the proof-of-concept/kill the pod
+to see stats on observed events. More recent versions print event stats on
+SIGUSR1. To send this to our running PoC in the cluster, we can get a shell
+in the container with `kubectl exec -it $podname -- bash`, then send SIGUSR1
+(signal 10) to pid 1, our running PoC in its own pid namespace, `kill -10 1`.
 
 # Testing
 

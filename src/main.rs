@@ -10,6 +10,10 @@ use libbpf_rs::{MapFlags, RingBufferBuilder};
 extern crate clap;
 use clap::Parser;
 
+extern crate signal_hook;
+use signal_hook::consts::signal::SIGUSR1;
+use signal_hook::iterator::Signals;
+
 #[path = "bpf/.output/stack_pivot_poc.skel.rs"]
 mod stack_pivot_poc;
 use stack_pivot_poc::*;
@@ -147,6 +151,10 @@ fn main() -> Result<(), Error> {
     let open_skel = skel_builder.open().unwrap();
     let mut skel = open_skel.load().unwrap();
 
+    // SIGUSR1 handler to print info to stdout
+    let mut signals = Signals::new(&[ SIGUSR1 ])?;
+
+    // easy ctrl+c support to cleanly exit & print info
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
@@ -179,10 +187,27 @@ fn main() -> Result<(), Error> {
     skel.attach();
 
     println!("[I] Running! Follow debug output with `sudo less +F /sys/kernel/debug/tracing/trace`");
+    println!("[I] stats on received events can be show by sending SIGUSR1 to this process");
     println!("[I] This terminal will only have messages for stack pivot events");
 
     while running.load(Ordering::SeqCst) {
         ringbuf.poll(Duration::from_millis(100));
+        for sig in signals.pending() {
+            //match sig as libc::c_int {
+            println!("[I] signal: {}", sig);
+            match sig {
+                SIGUSR1 => {
+                    println!("\n[I] statistics for stack pivot checks:");
+                    println!("\tOK_EVENTS: {}", OK_EVENTS.load(Ordering::SeqCst));
+                    println!("\tNO_VMA_EVENTS: {}", NO_VMA_EVENTS.load(Ordering::SeqCst));
+                    println!("\tANCIENT_THREAD_EVENTS: {}", ANCIENT_THREAD_EVENTS.load(Ordering::SeqCst));
+                    println!("\tPOSSIBLE_GOLANG_STACK_EVENTS: {}", POSSIBLE_GOLANG_STACK_EVENTS.load(Ordering::SeqCst));
+                    println!("\tSTACK_PIVOT_EVENTS: {}", STACK_PIVOT_EVENTS.load(Ordering::SeqCst));
+                    println!("\tUNKNOWN_EVENTS: {}", UNKNOWN_EVENTS.load(Ordering::SeqCst));
+                },
+                _ => unreachable!(),
+            }
+        }
     }
 
     println!("\n[I] statistics for stack pivot checks:");
