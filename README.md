@@ -1,5 +1,10 @@
 PoC of detecting stack pivots using eBPF
 
+# License
+
+All code is licensed under the Apache 2.0 license unless indicated otherwise.
+All eBPF source code (code under src/bpf/) is licensed under the GPL 2.0.
+
 # Stack Pivots
 
 Situation: you have a stack-based buffer overflow and can overwrite the

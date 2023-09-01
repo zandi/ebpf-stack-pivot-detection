@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
+
 #ifndef UTILS_H_
 #define UTILS_H_
 
 // stolen definitions
-// linux/sched.h
+// include/linux/sched.h
 #define CLONE_VM    0x00000100  /* set if VM shared between processes */
 #define CLONE_THREAD    0x00010000  /* Same thread group? */
 #define CLONE_VFORK	0x00004000	/* set if the parent wants the child to wake it up on mm_release */
