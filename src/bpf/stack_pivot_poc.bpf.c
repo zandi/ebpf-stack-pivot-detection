@@ -25,7 +25,7 @@
 
 #include "utils.h"
 
-char LICENSE[] SEC("license") = "Dual BSD/GPL";
+char LICENSE[] SEC("license") = "GPL";
 
 // BPF_CHECK_RSP macro definitions
 //

@@ -5,6 +5,12 @@ PoC of detecting stack pivots using eBPF
 All code is licensed under the Apache 2.0 license unless indicated otherwise.
 All eBPF source code (code under src/bpf/) is licensed under the GPL 2.0.
 
+# Kernel Compatibility
+
+Only kernels 5.11 - 6.0 are supported. Specifically, this proof-of-concept
+doesn't yet support maple trees for looking up VMAs, and kernel 6.1 removed
+rb-trees from those data structures in favor of maple trees.
+
 # Stack Pivots
 
 Situation: you have a stack-based buffer overflow and can overwrite the
