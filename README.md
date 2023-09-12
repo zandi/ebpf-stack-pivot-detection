@@ -261,14 +261,7 @@ result in the `app/build/native/nativeBuild/` directory.
 
 # TODO
 
-* Refactor & simplify code
-** refactor data structures, event types as necessary (less userland events)
-** double-check that we pull in updates from Anthony's code
-* make eBPF programs for syscalls an exploit is likely to use, check user sp against known stack regions
-** failing check gets kill signal sent immediately
-* Revisit `check_stack_pivot` logic, simplify function
-* test against go binaries
-* test program which takes input string describing clones/forks/execves to do (randomly by default) for better stress testing of dealing with process/thread creation.
+* Either update to handle kernel differences around 6.1 and maple trees vs rb-trees, or detect 5.17+ and use newerfind_vma helper.
 * heavier testing against expected workload binaries (nginx, nodejs/go/java apps)
 
 # Caveats
