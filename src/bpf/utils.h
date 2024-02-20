@@ -150,6 +150,10 @@ static int find_vma_range(struct mm_struct *mm, ulong addr, ulong *start,
     ulong vm_flags = 0;
     ulong off_vm_rb = 0;
 
+    /* these fields have changed.
+    vm_area_struct vm_rb field gone in 6.1
+    mm_struct fields mmap and mm_rb gone in 6.1
+    */
     BPF_READ(mmap, mm->mmap);
     BPF_READ(rb_node, mm->mm_rb);
     off_vm_rb = __CORE_RELO(mmap, vm_rb, BYTE_OFFSET);
